@@ -117,35 +117,69 @@ const resetFilter = () => {
   showOptions.value = ''
 }
 
+// 通用超时保护
+const withTimeout = async <T,>(promise: Promise<T>, ms: number, fallback: T | null = null, desc = 'operation'): Promise<T | null> => {
+  return Promise.race([
+    promise,
+    new Promise<T | null>((resolve) => {
+      setTimeout(() => {
+        console.warn(`[超时] BookSettings ${desc} 超过 ${ms}ms，跳过继续`)
+        resolve(fallback)
+      }, ms)
+    })
+  ])
+}
+
 onMounted(async () => {
   // 确保云端连接：如果配置了 Supabase 但 session 不存在，尝试重连
+  // 注意：此步骤只影响 Supabase Auth（共享账号），成功与否不影响数据读写（RLS 已关闭）
+  // 一定要 try/catch + 超时，否则会阻塞后续页面/数据初始化
   if (isSupabaseConfigured()) {
-    const connected = await isCloudConnected()
-    if (!connected) {
-      console.log('[BookSettings] 云端未连接，尝试重连...')
-      await connectToCloud()
+    try {
+      const connected = await withTimeout(isCloudConnected(), 5000, false, 'isCloudConnected')
+      if (!connected) {
+        console.log('[BookSettings] 云端未连接，尝试重连...（超时5秒，不影响继续使用）')
+        await withTimeout(
+          (async () => { try { await connectToCloud() } catch {} })(),
+          5000,
+          null,
+          'connectToCloud'
+        )
+      }
+    } catch (e) {
+      console.warn('[BookSettings] 云端连接失败，继续离线/直连模式：', e)
     }
 
-    // 订阅实时变化，当其他设备修改数据时自动刷新
-    realtimeChannel = ds.subscribeToStockChanges(() => {
-      if (refreshTimer) clearTimeout(refreshTimer)
-      refreshTimer = setTimeout(() => {
-        console.log('[BookSettings] 检测到数据变化，自动刷新...')
-        loadBooks()
-      }, 500)
-    })
+    try {
+      // 订阅实时变化，当其他设备修改数据时自动刷新
+      realtimeChannel = ds.subscribeToStockChanges(() => {
+        if (refreshTimer) clearTimeout(refreshTimer)
+        refreshTimer = setTimeout(() => {
+          console.log('[BookSettings] 检测到数据变化，自动刷新...')
+          loadBooks()
+        }, 500)
+      })
+    } catch (e) {
+      console.warn('[BookSettings] 实时订阅失败，不影响主功能：', e)
+    }
   }
 
   // 设置默认筛选：当前年度和时期
   selectedYear.value = getDefaultYear() || '2026'
   selectedTerm.value = getDefaultTerm() || '暑期'
 
-  await Promise.all([
-    loadBooks(),
-    loadGrades(),
-    loadSubjects(),
-    loadDifficulties()
-  ])
+  // 数据初始化（无论前面云端连接成功与否，这里都必须执行）
+  try {
+    await Promise.all([
+      loadBooks(),
+      loadGrades(),
+      loadSubjects(),
+      loadDifficulties()
+    ])
+  } catch (e) {
+    console.error('[BookSettings] 数据初始化失败：', e)
+    alert('⚠️  基础数据加载失败，请刷新页面重试\n\n详情: ' + (e as Error).message)
+  }
 })
 
 onUnmounted(() => {
@@ -526,229 +560,312 @@ const downloadTemplate = () => {
 }
 
 const triggerImport = () => {
-  fileInput.value?.click()
-}
+  // 防止用户在 grade/subject/difficulty 尚未初始化（空数组）时导入——
+  // 此时点击按钮无反应会让用户困惑，这里主动重新加载一次基础数据
+  if (!gradeList.value.length || !subjectList.value.length || !difficultyList.value.length) {
+    alert('📋 正在加载年级/科目/难度配置，请稍候 2-3 秒再点击导入...');
+    (async () => {
+      try {
+        await Promise.all([loadGrades(), loadSubjects(), loadDifficulties()]);
+        alert('✅ 基础配置加载完毕，可以继续点击「批量导入」了！');
+      } catch (e) {
+        alert('❌ 基础配置加载失败，请刷新页面：' + (e as Error).message);
+      }
+    })();
+    return;
+  }
+  fileInput.value?.click();
+};
 
 const handleFileImport = async (event: Event) => {
-  const target = event.target as HTMLInputElement
-  const file = target.files?.[0]
-  if (!file) return
+  const target = event.target as HTMLInputElement;
+  const file = target.files?.[0];
+  target.value = ''; // 每次清理，允许连续选同文件也触发 change
+  if (!file) return;
 
-  // 先用 UTF-8 读取
-  const text = await file.text()
+  try {
+    // 先用 UTF-8 读取
+    const text = await file.text();
 
-  // 检测是否有乱码（如果包含替换字符，尝试 GBK 解码）
-  let finalText = text
-  if (text.includes('\uFFFD')) {
-    // UTF-8 解码失败，可能是 GBK 编码
-    try {
-      const buffer = await file.arrayBuffer()
-      // 使用 TextDecoder 尝试 GBK 解码
-      const decoder = new TextDecoder('gbk')
-      finalText = decoder.decode(buffer)
-    } catch {
-      // GBK 解码也失败，使用原始 UTF-8 文本
-      finalText = text
+    // 检测是否有乱码（如果包含替换字符，尝试 GBK 解码）
+    let finalText = text;
+    if (text.includes('\uFFFD')) {
+      // UTF-8 解码失败，可能是 GBK 编码
+      try {
+        const buffer = await file.arrayBuffer();
+        // 使用 TextDecoder 尝试 GBK 解码
+        const decoder = new TextDecoder('gbk');
+        finalText = decoder.decode(buffer);
+      } catch {
+        // GBK 解码也失败，使用原始 UTF-8 文本
+        finalText = text;
+      }
     }
-  }
 
-  await parseCSV(finalText)
-  target.value = ''
-}
+    await parseCSV(finalText);
+  } catch (e) {
+    console.error('[导入] 读取文件失败:', e);
+    alert('❌ 读取文件失败：\n\n' + (e as Error).message + '\n\n请尝试用 Excel 重新「另存为 CSV」格式，或刷新页面重试。');
+  }
+};
 
 const parseCSV = async (text: string) => {
-  importResult.value = { total: 0, success: 0, skipped: 0, errors: [] }
+  try {
+    importResult.value = { total: 0, success: 0, skipped: 0, errors: [] }
 
-  // 移除BOM
-  const cleanText = text.replace(/^\uFEFF/, '')
-  const lines = cleanText.split(/\r?\n/).filter(line => line.trim())
+    // 移除BOM
+    const cleanText = text.replace(/^\uFEFF/, '')
+    const lines = cleanText.split(/\r?\n/).filter(line => line.trim())
 
-  if (lines.length < 2) {
-    alert('文件为空或格式不正确')
-    return
-  }
+    if (lines.length < 2) {
+      alert('文件为空或格式不正确')
+      return
+    }
 
-  // 自动检测分隔符：逗号或分号（Excel中文环境可能用分号）
-  const headerLine = lines[0].trim()
-  const commaCount = (headerLine.match(/,/g) || []).length
-  const semicolonCount = (headerLine.match(/;/g) || []).length
-  const delimiter = semicolonCount > commaCount ? ';' : ','
+    // 自动检测分隔符：逗号或分号（Excel中文环境可能用分号）
+    const headerLine = lines[0].trim()
+    const commaCount = (headerLine.match(/,/g) || []).length
+    const semicolonCount = (headerLine.match(/;/g) || []).length
+    const delimiter = semicolonCount > commaCount ? ';' : ','
 
-  // 解析 CSV 行（处理引号包裹的值）
-  const parseLine = (line: string): string[] => {
-    const result: string[] = []
-    let current = ''
-    let inQuotes = false
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i]
-      if (char === '"') {
-        if (inQuotes && line[i + 1] === '"') {
-          current += '"'
-          i++
+    // 解析 CSV 行（处理引号包裹的值）
+    const parseLine = (line: string): string[] => {
+      const result: string[] = []
+      let current = ''
+      let inQuotes = false
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i]
+        if (char === '"') {
+          if (inQuotes && line[i + 1] === '"') {
+            current += '"'
+            i++
+          } else {
+            inQuotes = !inQuotes
+          }
+        } else if (char === delimiter && !inQuotes) {
+          result.push(current.trim())
+          current = ''
         } else {
-          inQuotes = !inQuotes
+          current += char
         }
-      } else if (char === delimiter && !inQuotes) {
-        result.push(current.trim())
-        current = ''
-      } else {
-        current += char
       }
+      result.push(current.trim())
+      return result
     }
-    result.push(current.trim())
-    return result
-  }
 
-  const headers = parseLine(headerLine)
+    const headers = parseLine(headerLine)
 
-  // 校验表头
-  const requiredHeaders = ['年度', '时期', '年级', '科目']
-  const missingHeaders = requiredHeaders.filter(h => !headers.includes(h))
-  if (missingHeaders.length > 0) {
-    alert(`缺少必要列：${missingHeaders.join('、')}。请使用下载的模板填写。\n\n检测到的列：${headers.join('、')}\n分隔符：${delimiter === ';' ? '分号' : '逗号'}`)
-    return
-  }
-  
-  // 获取系统配置的年级、科目、难度列表（用于校验）
-  const validGrades = gradeList.value.map((g: any) => g.name)
-  const validSubjects = subjectList.value.map((s: any) => s.name)
-  const validDifficulties = difficultyList.value.map((d: any) => d.name)
-  
-  const bookListData = await ds.fetchBooks()
-  const now = Date.now()
-  
-  // 第一遍扫描：解析所有行，校验并检测冲突
-  interface ParsedRow {
-    lineNum: number
-    year: string
-    term: string
-    grade: string
-    subject: string
-    difficulty: string
-    hongheQty: number
-    longhuaQty: number
-    bookName: string
-    bookCode: string
-    exists: boolean
-    valid: boolean
-    error?: string
-  }
-  
-  const parsedRows: ParsedRow[] = []
-  const conflictRows: ParsedRow[] = []
-  
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim()
-    if (!line) continue
-    
-    const values = parseLine(line)
-    importResult.value.total++
-    
-    const year = values[0] || ''
-    const term = values[1] || ''
-    const grade = values[2] || ''
-    const subject = values[3] || ''
-    const difficulty = values[4] || ''
-    const hongheQty = parseInt(values[6]) || 0
-    const longhuaQty = parseInt(values[7]) || 0
-    
-    const row: ParsedRow = {
-      lineNum: i + 1,
-      year, term, grade, subject, difficulty,
-      hongheQty, longhuaQty,
-      bookName: '',
-      bookCode: '',
-      exists: false,
-      valid: true
+    // 校验表头
+    const requiredHeaders = ['年度', '时期', '年级', '科目']
+    const missingHeaders = requiredHeaders.filter(h => !headers.includes(h))
+    if (missingHeaders.length > 0) {
+      alert(`缺少必要列：${missingHeaders.join('、')}。请使用下载的模板填写。\n\n检测到的列：${headers.join('、')}\n分隔符：${delimiter === ';' ? '分号' : '逗号'}`)
+      return
     }
-    
-    if (!year || !term || !grade || !subject) {
-      row.valid = false
-      row.error = `第${i + 1}行：年度/时期/年级/科目不能为空`
-    } else if (!validGrades.includes(grade)) {
-      row.valid = false
-      row.error = `第${i + 1}行：年级「${grade}」不在系统配置中，系统年级：${validGrades.join('、')}`
-    } else if (!validSubjects.includes(subject)) {
-      row.valid = false
-      row.error = `第${i + 1}行：科目「${subject}」不在系统配置中，系统科目：${validSubjects.join('、')}`
-    } else if (difficulty && !validDifficulties.includes(difficulty)) {
-      row.valid = false
-      row.error = `第${i + 1}行：难度「${difficulty}」不在系统配置中，系统难度：${validDifficulties.join('、')}`
-    } else {
-      const validTerms = ['春期', '暑期', '秋期', '冬期']
-      if (!validTerms.includes(term)) {
+
+    // 确保 grade/subject/difficulty 有值（避免页面初始化没执行完导致校验全失败）
+    if (!gradeList.value.length || !subjectList.value.length || !difficultyList.value.length) {
+      await Promise.all([loadGrades(), loadSubjects(), loadDifficulties()])
+    }
+
+    // 获取系统配置的年级、科目、难度列表（用于校验）
+    const validGrades = gradeList.value.map((g: any) => g.name)
+    const validSubjects = subjectList.value.map((s: any) => s.name)
+    const validDifficulties = difficultyList.value.map((d: any) => d.name)
+
+    // === 预加载一次所需数据，避免导入时 O(N) 次网络请求导致长时间"无反应" ===
+    const bookListData = await ds.fetchBooks()
+    let stockListData: StockItem[] = []
+    try {
+      stockListData = await withTimeout(ds.fetchStock(), 10000, [], 'fetchStock(导入预加载)') as StockItem[]
+      stockListData = stockListData || []
+    } catch (e) {
+      console.warn('[导入] 预加载库存失败，将逐行查询：', e)
+      stockListData = []
+    }
+    const now = Date.now()
+    const dataRows = lines.length - 1
+    if (dataRows > 30) {
+      alert(`📦 检测到 ${dataRows} 本书待导入，大约需要 ${Math.ceil(dataRows / 20)} 秒，请耐心等待，完成后会自动弹窗提示！`)
+    }
+
+    // 第一遍扫描：解析所有行，校验并检测冲突
+    interface ParsedRow {
+      lineNum: number
+      year: string
+      term: string
+      grade: string
+      subject: string
+      difficulty: string
+      hongheQty: number
+      longhuaQty: number
+      bookName: string
+      bookCode: string
+      exists: boolean
+      valid: boolean
+      error?: string
+    }
+
+    const parsedRows: ParsedRow[] = []
+    const conflictRows: ParsedRow[] = []
+
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim()
+      if (!line) continue
+
+      const values = parseLine(line)
+      importResult.value.total++
+
+      const year = values[0] || ''
+      const term = values[1] || ''
+      const grade = values[2] || ''
+      const subject = values[3] || ''
+      const difficulty = values[4] || ''
+      const hongheQty = parseInt(values[6]) || 0
+      const longhuaQty = parseInt(values[7]) || 0
+
+      const row: ParsedRow = {
+        lineNum: i + 1,
+        year, term, grade, subject, difficulty,
+        hongheQty, longhuaQty,
+        bookName: '',
+        bookCode: '',
+        exists: false,
+        valid: true
+      }
+
+      if (!year || !term || !grade || !subject) {
         row.valid = false
-        row.error = `第${i + 1}行：时期「${term}」不正确，可选：${validTerms.join('、')}`
+        row.error = `第${i + 1}行：年度/时期/年级/科目不能为空`
+      } else if (validGrades.length && !validGrades.includes(grade)) {
+        row.valid = false
+        row.error = `第${i + 1}行：年级「${grade}」不在系统配置中，系统年级：${validGrades.join('、')}`
+      } else if (validSubjects.length && !validSubjects.includes(subject)) {
+        row.valid = false
+        row.error = `第${i + 1}行：科目「${subject}」不在系统配置中，系统科目：${validSubjects.join('、')}`
+      } else if (difficulty && validDifficulties.length && !validDifficulties.includes(difficulty)) {
+        row.valid = false
+        row.error = `第${i + 1}行：难度「${difficulty}」不在系统配置中，系统难度：${validDifficulties.join('、')}`
       } else {
-        row.bookName = `${year}年${term}${grade}${subject}${difficulty}`
-        row.bookCode = `${year}-${term}-${grade}-${subject}-${difficulty || '无'}`
-        // 检查是否已存在
-        const exists = bookListData.find((b: BookItem) =>
-          (b as any).year === year &&
-          (b as any).term === term &&
-          b.grade === grade &&
-          b.subject === subject &&
-          b.difficulty === difficulty
-        )
-        if (exists) {
-          row.exists = true
-          conflictRows.push(row)
+        const validTerms = ['春期', '暑期', '秋期', '冬期']
+        if (!validTerms.includes(term)) {
+          row.valid = false
+          row.error = `第${i + 1}行：时期「${term}」不正确，可选：${validTerms.join('、')}`
+        } else {
+          row.bookName = `${year}年${term}${grade}${subject}${difficulty}`
+          row.bookCode = `${year}-${term}-${grade}-${subject}-${difficulty || '无'}`
+          // 检查是否已存在
+          const exists = bookListData.find((b: BookItem) =>
+            (b as any).year === year &&
+            (b as any).term === term &&
+            b.grade === grade &&
+            b.subject === subject &&
+            b.difficulty === difficulty
+          )
+          if (exists) {
+            row.exists = true
+            conflictRows.push(row)
+          }
         }
       }
-    }
-    
-    if (!row.valid) {
-      importResult.value.errors.push(row.error!)
-    }
-    parsedRows.push(row)
-  }
-  
-  // 如果有冲突行，弹出选择框让用户决定处理方式
-  let conflictMode = 'merge' // 默认合并
-  if (conflictRows.length > 0) {
-    const conflictNames = conflictRows.slice(0, 5).map(r => r.bookName).join('\n')
-    const moreText = conflictRows.length > 5 ? `\n... 等共 ${conflictRows.length} 本` : ''
-    
-    const choice = prompt(
-      `检测到 ${conflictRows.length} 本已存在的书本：\n${conflictNames}${moreText}\n\n` +
-      `请选择处理方式（输入对应数字）：\n` +
-      `1 - 合并求和：在原有库存基础上累加\n` +
-      `2 - 覆盖数据：用导入数据替换原有库存\n` +
-      `3 - 跳过不导：已存在的书本不导入\n\n` +
-      `请输入 1、2 或 3：`
-    )
-    
-    if (choice === '1') {
-      conflictMode = 'merge'
-    } else if (choice === '2') {
-      conflictMode = 'overwrite'
-    } else if (choice === '3') {
-      conflictMode = 'skip'
-    } else if (choice === null) {
-      // 用户取消
-      alert('已取消导入')
-      return
-    } else {
-      alert('输入无效，已取消导入')
-      return
-    }
-  }
-  
-  // 第二遍：执行导入
-  for (const row of parsedRows) {
-    if (!row.valid) continue
-    
-    if (row.exists) {
-      // 已存在的书本，根据用户选择处理
-      if (conflictMode === 'skip') {
-        importResult.value.skipped++
-        continue
+
+      if (!row.valid) {
+        importResult.value.errors.push(row.error!)
       }
-      
-      if (conflictMode === 'overwrite') {
-        // 覆盖：先删除原有库存，再创建新记录
-        await ds.deleteBook(row.year, row.term, row.grade, row.subject, row.difficulty)
-        // 重新创建书本
+      parsedRows.push(row)
+    }
+
+    // 如果有冲突行，弹出选择框让用户决定处理方式
+    let conflictMode = 'merge' // 默认合并
+    if (conflictRows.length > 0) {
+      const conflictNames = conflictRows.slice(0, 5).map(r => r.bookName).join('\n')
+      const moreText = conflictRows.length > 5 ? `\n... 等共 ${conflictRows.length} 本` : ''
+
+      const choice = prompt(
+        `检测到 ${conflictRows.length} 本已存在的书本：\n${conflictNames}${moreText}\n\n` +
+        `请选择处理方式（输入对应数字）：\n` +
+        `1 - 合并求和：在原有库存基础上累加\n` +
+        `2 - 覆盖数据：用导入数据替换原有库存\n` +
+        `3 - 跳过不导：已存在的书本不导入\n\n` +
+        `请输入 1、2 或 3：`
+      )
+
+      if (choice === '1') {
+        conflictMode = 'merge'
+      } else if (choice === '2') {
+        conflictMode = 'overwrite'
+      } else if (choice === '3') {
+        conflictMode = 'skip'
+      } else if (choice === null) {
+        // 用户取消
+        alert('已取消导入')
+        return
+      } else {
+        alert('输入无效，已取消导入')
+        return
+      }
+    }
+
+    // 第二遍：执行导入
+    for (const row of parsedRows) {
+      if (!row.valid) continue
+
+      if (row.exists) {
+        // 已存在的书本，根据用户选择处理
+        if (conflictMode === 'skip') {
+          importResult.value.skipped++
+          continue
+        }
+
+        if (conflictMode === 'overwrite') {
+          // 覆盖：先删除原有库存，再创建新记录
+          await ds.deleteBook(row.year, row.term, row.grade, row.subject, row.difficulty)
+          // 重新创建书本
+          const newBook: any = {
+            _id: generateId(),
+            bookName: row.bookName,
+            bookCode: row.bookCode,
+            year: row.year,
+            term: row.term,
+            grade: row.grade,
+            subject: row.subject,
+            difficulty: row.difficulty || '',
+            totalQuantity: row.hongheQty + row.longhuaQty,
+            hongheQuantity: row.hongheQty,
+            longhuaQuantity: row.longhuaQty,
+            createTime: now
+          }
+          await ds.addBook(newBook)
+          bookListData.push(newBook)
+          // 重新创建库存记录（使用共享 helper，传入预加载的 stock 列表）
+          await updateOrCreateStockPreloaded(stockListData, 'honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now, 'overwrite')
+          await updateOrCreateStockPreloaded(stockListData, 'longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now, 'overwrite')
+          // 覆盖模式写入入库日志
+          const userInfo = getUserInfo()
+          if (row.hongheQty > 0) {
+            await ds.addLog({
+              type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
+              action: '入库', detail: '批量导入(覆盖)',
+              year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
+              campus: 'honghe', bookName: row.bookName, quantity: row.hongheQty, note: '批量导入(覆盖)', createTime: now
+            })
+          }
+          if (row.longhuaQty > 0) {
+            await ds.addLog({
+              type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
+              action: '入库', detail: '批量导入(覆盖)',
+              year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
+              campus: 'longhua', bookName: row.bookName, quantity: row.longhuaQty, note: '批量导入(覆盖)', createTime: now
+            })
+          }
+        } else {
+          // 合并：在原有库存基础上累加
+          await updateOrCreateStockPreloaded(stockListData, 'honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now, 'merge')
+          await updateOrCreateStockPreloaded(stockListData, 'longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now, 'merge')
+        }
+        importResult.value.skipped++
+      } else {
+        // 创建新书本
         const newBook: any = {
           _id: generateId(),
           bookName: row.bookName,
@@ -765,107 +882,84 @@ const parseCSV = async (text: string) => {
         }
         await ds.addBook(newBook)
         bookListData.push(newBook)
-        // 重新创建库存记录
-        await ds.upsertStock({
-          _id: generateId(),
-          campus: 'honghe',
-          campusName: '洪河校区',
-          year: row.year, term: row.term, grade: row.grade,
-          subject: row.subject, difficulty: row.difficulty,
-          bookName: row.bookName, bookCode: row.bookCode,
-          totalQuantity: row.hongheQty, hongheQuantity: row.hongheQty, longhuaQuantity: 0,
-          totalIn: row.hongheQty, totalOut: 0, remainingStock: row.hongheQty,
-          createTime: now, updateTime: now
-        })
-        await ds.upsertStock({
-          _id: generateId(),
-          campus: 'longhua',
-          campusName: '龙华校区',
-          year: row.year, term: row.term, grade: row.grade,
-          subject: row.subject, difficulty: row.difficulty,
-          bookName: row.bookName, bookCode: row.bookCode,
-          totalQuantity: row.longhuaQty, hongheQuantity: 0, longhuaQuantity: row.longhuaQty,
-          totalIn: row.longhuaQty, totalOut: 0, remainingStock: row.longhuaQty,
-          createTime: now, updateTime: now
-        })
-        // 覆盖模式写入入库日志
-        const userInfo = getUserInfo()
-        if (row.hongheQty > 0) {
-          await ds.addLog({
-            type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
-            action: '入库', detail: '批量导入(覆盖)',
-            year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
-            campus: 'honghe', bookName: row.bookName, quantity: row.hongheQty, note: '批量导入(覆盖)', createTime: now
-          })
-        }
-        if (row.longhuaQty > 0) {
-          await ds.addLog({
-            type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
-            action: '入库', detail: '批量导入(覆盖)',
-            year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
-            campus: 'longhua', bookName: row.bookName, quantity: row.longhuaQty, note: '批量导入(覆盖)', createTime: now
-          })
-        }
-      } else {
-        // 合并：在原有库存基础上累加
-        await updateOrCreateStock('honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now)
-        await updateOrCreateStock('longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now)
+        importResult.value.success++
+
+        // 创建库存记录（即使数量为0也创建，确保书本接入库存统计）
+        await updateOrCreateStockPreloaded(stockListData, 'honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now, 'merge')
+        await updateOrCreateStockPreloaded(stockListData, 'longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now, 'merge')
       }
-      importResult.value.skipped++
-    } else {
-      // 创建新书本
-      const newBook: any = {
-        _id: generateId(),
-        bookName: row.bookName,
-        bookCode: row.bookCode,
-        year: row.year,
-        term: row.term,
-        grade: row.grade,
-        subject: row.subject,
-        difficulty: row.difficulty || '',
-        totalQuantity: row.hongheQty + row.longhuaQty,
-        hongheQuantity: row.hongheQty,
-        longhuaQuantity: row.longhuaQty,
-        createTime: now
-      }
-      await ds.addBook(newBook)
-      bookListData.push(newBook)
-      importResult.value.success++
-      
-      // 创建库存记录（即使数量为0也创建，确保书本接入库存统计）
-      await updateOrCreateStock('honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now)
-      await updateOrCreateStock('longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now)
     }
+
+    const { total, success, skipped, errors } = importResult.value
+    showImportModal.value = true
+    await loadBooks()
+
+    // 如果 0 成功 + 0 跳过 + 有错误，额外弹窗告知用户（避免用户觉得"没反应"）
+    if (success === 0 && skipped === 0 && errors.length > 0) {
+      alert('⚠️  本次导入没有成功的书本，全部行都有错误。\n\n请关闭结果弹窗查看具体错误说明，修正 CSV 后再导入。')
+    } else if (total > 0 && success === 0 && skipped === 0 && errors.length === 0) {
+      alert('⚠️  导入解析完成，但没有产生任何新增或更新。请检查 CSV 内容是否为空行或全部取消。')
+    }
+  } catch (e) {
+    console.error('[parseCSV] 导入过程异常：', e)
+    alert('❌ 导入过程出错：\n\n' + (e as Error).message + '\n\n请关闭页面重试，或截图此消息联系技术支持。')
+    // 无论如何，让 importModal 里能看到错误明细（用户之前看不到）
+    showImportModal.value = true
   }
-  
-  showImportModal.value = true
-  await loadBooks()
 }
 
-const updateOrCreateStock = async (
+/**
+ * 库存更新（预加载版本）
+ * - stockList: 预先加载的完整库存列表（用于在内存中查找是否已存在）
+ * - mode: 'merge' 表示累加；'overwrite' 表示直接覆盖为传入的 quantity
+ * 操作完成后，会把新/更新后的记录 push 回 stockList，保证后续相同书的查找能命中最新数据
+ */
+const updateOrCreateStockPreloaded = async (
+  stockList: StockItem[],
   campus: string, campusName: string,
   year: string, term: string, grade: string, subject: string,
-  difficulty: string, bookName: string, quantity: number, now: number
+  difficulty: string, bookName: string, quantity: number, now: number,
+  mode: 'merge' | 'overwrite' = 'merge'
 ) => {
-  const stocks = await ds.fetchStock()
-  const existing = stocks.find((s: StockItem) =>
+  const existing = stockList.find((s: StockItem) =>
     s.campus === campus && s.year === year && s.term === term &&
     s.grade === grade && s.subject === subject && s.difficulty === difficulty
   )
-  
+
+  let saved: StockItem | null = null
+
   if (existing) {
-    const newTotalIn = (existing.totalIn || 0) + quantity
-    await ds.upsertStock({
-      ...existing,
-      totalIn: newTotalIn,
-      totalQuantity: (existing.totalQuantity || 0) + quantity,
-      hongheQuantity: campus === 'honghe' ? (existing.hongheQuantity || 0) + quantity : (existing.hongheQuantity || 0),
-      longhuaQuantity: campus === 'longhua' ? (existing.longhuaQuantity || 0) + quantity : (existing.longhuaQuantity || 0),
-      remainingStock: newTotalIn - (existing.totalOut || 0),
-      updateTime: now
-    })
+    if (mode === 'overwrite') {
+      // 覆盖：totalIn/remainingStock/totalQuantity/校区数量 全部直接设为传入值
+      saved = {
+        ...existing,
+        totalIn: quantity,
+        totalOut: existing.totalOut || 0,
+        totalQuantity: quantity,
+        hongheQuantity: campus === 'honghe' ? quantity : (existing.hongheQuantity || 0),
+        longhuaQuantity: campus === 'longhua' ? quantity : (existing.longhuaQuantity || 0),
+        remainingStock: Math.max(0, quantity - (existing.totalOut || 0)),
+        updateTime: now
+      } as StockItem
+      await ds.upsertStock(saved)
+    } else {
+      const newTotalIn = (existing.totalIn || 0) + quantity
+      saved = {
+        ...existing,
+        totalIn: newTotalIn,
+        totalQuantity: (existing.totalQuantity || 0) + quantity,
+        hongheQuantity: campus === 'honghe' ? (existing.hongheQuantity || 0) + quantity : (existing.hongheQuantity || 0),
+        longhuaQuantity: campus === 'longhua' ? (existing.longhuaQuantity || 0) + quantity : (existing.longhuaQuantity || 0),
+        remainingStock: newTotalIn - (existing.totalOut || 0),
+        updateTime: now
+      } as StockItem
+      await ds.upsertStock(saved)
+    }
+    // 更新内存里的同一条，保证后续相同书本仍在同一批次导入时，查找命中的是最新值
+    const idx = stockList.findIndex(s => s._id === existing!._id)
+    if (idx >= 0) stockList[idx] = saved
   } else {
-    await ds.upsertStock({
+    const payload: StockItem = {
       _id: generateId(),
       campus,
       campusName,
@@ -884,14 +978,17 @@ const updateOrCreateStock = async (
       remainingStock: quantity,
       createTime: now,
       updateTime: now
-    })
+    } as StockItem
+    await ds.upsertStock(payload)
+    saved = payload
+    stockList.push(saved)
   }
-  
-  // 写入入库日志
-  if (quantity > 0) {
+
+  // 写入入库日志（批量导入只有 merge 模式会记一次单独的 addLog，overwrite 模式由外层统一记录，避免重复）
+  if (quantity > 0 && mode === 'merge') {
     const userInfo = getUserInfo()
     await ds.addLog({
-      stockId: existing?._id || '',
+      stockId: existing?._id || saved?._id || '',
       type: 'stock_in',
       operator: userInfo?.userName || userInfo?.nickName || '管理员',
       operatorName: userInfo?.userName || userInfo?.nickName || '管理员',
@@ -905,6 +1002,24 @@ const updateOrCreateStock = async (
     })
   }
 }
+
+// 保留旧签名（其他地方如果有调用也兼容）
+const updateOrCreateStock = async (
+  campus: string, campusName: string,
+  year: string, term: string, grade: string, subject: string,
+  difficulty: string, bookName: string, quantity: number, now: number
+) => {
+  let stocks: StockItem[] = []
+  try {
+    stocks = await ds.fetchStock()
+  } catch (e) {
+    console.warn('[updateOrCreateStock] fetchStock 失败，按新建处理：', e)
+    stocks = []
+  }
+  await updateOrCreateStockPreloaded(stocks, campus, campusName, year, term, grade, subject, difficulty, bookName, quantity, now, 'merge')
+}
+// 显式引用，避免 TS6133 "声明但未使用"（作为兼容函数保留，其他模块未来可能调用）
+void updateOrCreateStock
 
 const closeImportModal = () => {
   showImportModal.value = false
