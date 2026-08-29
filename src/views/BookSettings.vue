@@ -5,6 +5,11 @@ import { getDefaultYear, getDefaultTerm, getUserInfo } from '../utils/storage'
 import { isCloudConnected, connectToCloud, isSupabaseConfigured } from '../utils/supabase'
 import { generateId } from '../utils/mockData'
 import * as ds from '../services/dataService'
+import {
+  localOnlyAddBook, localOnlyDeleteBook, localOnlyUpsertStock, localOnlyAddLog,
+  localGetStockData as localOnlyGetStockData
+} from '../services/dataService'
+import { getBookList as localOnlyGetBookList } from '../utils/storage'
 import type { BookItem, StockItem } from '../types'
 
 const bookList = ref<BookItem[]>([])
@@ -718,17 +723,11 @@ const parseCSV = async (text: string) => {
       return
     }
 
-    // === 预加载一次所需数据，避免导入时 O(N) 次网络请求导致长时间"无反应" ===
-    //     Supabase 从 GitHub Pages 访问经常 10 秒才超时，所以这里给 5 秒上限，超过就空数组由后面逐行兜底（逐行也有 withTimeout）
-    const bookListData = await withTimeout(ds.fetchBooks(), 5000, [] as any[], 'fetchBooks(导入预加载)') as any[]
-    let stockListData: StockItem[] = []
-    try {
-      stockListData = await withTimeout(ds.fetchStock(), 5000, [], 'fetchStock(导入预加载)') as StockItem[]
-      stockListData = stockListData || []
-    } catch (e) {
-      console.warn('[导入] 预加载库存失败，将逐行查询：', e)
-      stockListData = []
-    }
+    // === 预加载一次所需数据（直接读本地 localStorage，毫秒级，避免 Supabase 访问卡死用户） ===
+    //     注意：fetchBooks()/fetchStock() 异步版内部会先 await isReallyOnline()，在 GitHub Pages
+    //     访问 Supabase 不通时要等 5-10 秒超时。导入场景直接同步读本地数据即可，秒出结果。
+    const bookListData: any[] = localOnlyGetBookList() || []
+    let stockListData: StockItem[] = localOnlyGetStockData() || []
     const now = Date.now()
 
     // 第一遍扫描：解析所有行，校验并检测冲突
@@ -863,7 +862,7 @@ const parseCSV = async (text: string) => {
       }
     }
 
-    // 第二遍：执行导入
+    // 第二遍：执行导入（全部纯 localStorage 同步写入，毫秒级完成，绝不卡用户）
     for (const row of parsedRows) {
       if (!row.valid) continue
 
@@ -875,15 +874,8 @@ const parseCSV = async (text: string) => {
         }
 
         if (conflictMode === 'overwrite') {
-          // 覆盖：先删除原有库存，再创建新记录
-          try {
-            await withTimeout(
-              ds.deleteBook(row.year, row.term, row.grade, row.subject, row.difficulty),
-              6000, null, `deleteBook(第${row.lineNum}行 ${row.bookName})`
-            )
-          } catch (e) {
-            console.warn('[导入] 删除旧书失败(继续覆盖)：', row.bookName, e)
-          }
+          // 覆盖：先删除原有本地书本/库存/日志/预测，再创建新记录
+          localOnlyDeleteBook(row.year, row.term, row.grade, row.subject, row.difficulty)
           // 重新创建书本
           const newBook: any = {
             _id: generateId(),
@@ -901,7 +893,7 @@ const parseCSV = async (text: string) => {
           }
           let savedOk = true
           try {
-            await withTimeout(ds.addBook(newBook), 6000, null, `addBook(第${row.lineNum}行 ${row.bookName})`)
+            localOnlyAddBook(newBook)
             bookListData.push(newBook)
           } catch (e) {
             savedOk = false
@@ -910,31 +902,31 @@ const parseCSV = async (text: string) => {
           if (savedOk) {
             let stockFailed = false
             try {
-              await updateOrCreateStockPreloaded(stockListData, 'honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now, 'overwrite')
+              updateOrCreateStockPreloaded(stockListData, 'honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now, 'overwrite')
             } catch (e) { stockFailed = true; importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】洪河校区库存覆盖失败：${(e as Error).message || e}`) }
             try {
-              await updateOrCreateStockPreloaded(stockListData, 'longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now, 'overwrite')
+              updateOrCreateStockPreloaded(stockListData, 'longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now, 'overwrite')
             } catch (e) { stockFailed = true; importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】龙华校区库存覆盖失败：${(e as Error).message || e}`) }
-            // 覆盖模式写入入库日志（单校区失败不影响另一校区）
+            // 覆盖模式写入入库日志（本地同步）
             const userInfo = getUserInfo()
             if (row.hongheQty > 0) {
               try {
-                await withTimeout(ds.addLog({
+                localOnlyAddLog({
                   type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
                   action: '入库', detail: '批量导入(覆盖)',
                   year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
                   campus: 'honghe', bookName: row.bookName, quantity: row.hongheQty, note: '批量导入(覆盖)', createTime: now
-                }), 6000, null, `addLog(洪河-覆盖-${row.bookName})`)
+                })
               } catch {}
             }
             if (row.longhuaQty > 0) {
               try {
-                await withTimeout(ds.addLog({
+                localOnlyAddLog({
                   type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
                   action: '入库', detail: '批量导入(覆盖)',
                   year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
                   campus: 'longhua', bookName: row.bookName, quantity: row.longhuaQty, note: '批量导入(覆盖)', createTime: now
-                }), 6000, null, `addLog(龙华-覆盖-${row.bookName})`)
+                })
               } catch {}
             }
             if (!stockFailed) importResult.value.success++
@@ -943,10 +935,10 @@ const parseCSV = async (text: string) => {
           // 合并：在原有库存基础上累加
           let mergeFailed = false
           try {
-            await updateOrCreateStockPreloaded(stockListData, 'honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now, 'merge')
+            updateOrCreateStockPreloaded(stockListData, 'honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now, 'merge')
           } catch (e) { mergeFailed = true; importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】洪河校区库存累加失败：${(e as Error).message || e}`) }
           try {
-            await updateOrCreateStockPreloaded(stockListData, 'longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now, 'merge')
+            updateOrCreateStockPreloaded(stockListData, 'longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now, 'merge')
           } catch (e) { mergeFailed = true; importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】龙华校区库存累加失败：${(e as Error).message || e}`) }
           if (!mergeFailed) importResult.value.success++
           else importResult.value.skipped++
@@ -969,7 +961,7 @@ const parseCSV = async (text: string) => {
         }
         let savedOk = true
         try {
-          await withTimeout(ds.addBook(newBook), 6000, null, `addBook(第${row.lineNum}行 ${row.bookName})`)
+          localOnlyAddBook(newBook)
           bookListData.push(newBook)
         } catch (e) {
           savedOk = false
@@ -977,27 +969,37 @@ const parseCSV = async (text: string) => {
         }
         if (savedOk) {
           importResult.value.success++
-          // 创建库存记录（即使数量为0也创建，确保书本接入库存统计）
           try {
-            await updateOrCreateStockPreloaded(stockListData, 'honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now, 'merge')
+            updateOrCreateStockPreloaded(stockListData, 'honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now, 'merge')
           } catch (e) { importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】洪河校区库存失败：${(e as Error).message || e}`) }
           try {
-            await updateOrCreateStockPreloaded(stockListData, 'longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now, 'merge')
+            updateOrCreateStockPreloaded(stockListData, 'longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now, 'merge')
           } catch (e) { importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】龙华校区库存失败：${(e as Error).message || e}`) }
         }
       }
     }
 
     const { total, success, skipped, errors } = importResult.value
-    // —— 关键修复：先弹结果窗，再去 loadBooks
-    // 即使 loadBooks/syncLocalToCloud 挂起超时，用户至少能看到导入成功/失败的结果，不会以为"没反应"
+
+    // —— 关键修复（终极版）：全部本地写入已经毫秒级完成了
+    // 1) 立刻从本地刷列表、立刻弹结果窗 → 1 秒内有反馈，绝不"没反应"
+    // 2) void 异步调 syncLocalToCloud 慢慢同步云端，失败/超时都不影响用户可见的结果
+    try {
+      bookList.value = localOnlyGetBookList() || []
+    } catch (e) {
+      console.warn('[导入] 刷新书本列表失败：', e)
+    }
     showImportModal.value = true
 
-    try {
-      await withTimeout(loadBooks(), 10000, null, 'loadBooks(导入完成刷新)')
-    } catch (e) {
-      console.warn('[导入] 刷新列表失败，不影响导入结果：', e)
-    }
+    // 后台异步同步到云端（失败、超时都无人值守，绝不阻塞结果弹窗）
+    // 说明：syncLocalToCloud 本身会把所有本地变更 upsert 到 Supabase
+    void Promise.resolve().then(async () => {
+      try {
+        await withTimeout(ds.syncLocalToCloud(), 30000, null, 'syncLocalToCloud(导入后云同步)')
+      } catch (e) {
+        console.warn('[导入后云同步] 失败或超时，数据已保留在本地，下次进入/导出时可继续同步：', e)
+      }
+    })
 
     // 如果 0 成功 + 0 跳过 + 有错误，额外弹窗告知用户（避免用户觉得"没反应"）
     if (success === 0 && skipped === 0 && errors.length > 0) {
@@ -1017,27 +1019,29 @@ const parseCSV = async (text: string) => {
  * 库存更新（预加载版本）
  * - stockList: 预先加载的完整库存列表（用于在内存中查找是否已存在）
  * - mode: 'merge' 表示累加；'overwrite' 表示直接覆盖为传入的 quantity
- * 操作完成后，会把新/更新后的记录 push 回 stockList，保证后续相同书的查找能命中最新数据
+ * - 【全部纯 localStorage 同步操作】，毫秒级完成，绝不等待云端
+ *   操作完成后，会把新/更新后的记录 push 回 stockList，保证后续相同书的查找能命中最新值
  */
-const updateOrCreateStockPreloaded = async (
+const updateOrCreateStockPreloaded = (
   stockList: StockItem[],
   campus: string, campusName: string,
   year: string, term: string, grade: string, subject: string,
   difficulty: string, bookName: string, quantity: number, now: number,
   mode: 'merge' | 'overwrite' = 'merge'
-) => {
+): StockItem => {
   const existing = stockList.find((s: StockItem) =>
     s.campus === campus && s.year === year && s.term === term &&
     s.grade === grade && s.subject === subject && s.difficulty === difficulty
   )
 
-  let saved: StockItem | null = null
+  let saved: StockItem
 
   if (existing) {
     if (mode === 'overwrite') {
       // 覆盖：totalIn/remainingStock/totalQuantity/校区数量 全部直接设为传入值
-      saved = {
+      saved = localOnlyUpsertStock({
         ...existing,
+        campus, year, term, grade, subject, campusName, bookName,
         totalIn: quantity,
         totalOut: existing.totalOut || 0,
         totalQuantity: quantity,
@@ -1045,46 +1049,30 @@ const updateOrCreateStockPreloaded = async (
         longhuaQuantity: campus === 'longhua' ? quantity : (existing.longhuaQuantity || 0),
         remainingStock: Math.max(0, quantity - (existing.totalOut || 0)),
         updateTime: now
-      } as StockItem
-      try {
-        const r = await withTimeout<any>(
-          ds.upsertStock(saved),
-          6000, { success: false, error: 'upsertStock(覆盖) 超时（超过6秒未响应，已跳过以保证不卡死）' },
-          `upsertStock(覆盖 ${campusName}-${bookName})`
-        )
-        if (r && r.success === false) throw new Error(r.error || '写入库存失败')
-      } catch (e) {
-        console.warn('[导入] upsertStock(覆盖)失败，但已在本地内存更新：', campus, bookName, e)
-        throw e
-      }
+      }, 'overwrite')
     } else {
-      const newTotalIn = (existing.totalIn || 0) + quantity
-      saved = {
+      const qtyDelta = quantity
+      const newTotalIn = (existing.totalIn ?? 0) + qtyDelta
+      saved = localOnlyUpsertStock({
         ...existing,
-        totalIn: newTotalIn,
-        totalQuantity: (existing.totalQuantity || 0) + quantity,
-        hongheQuantity: campus === 'honghe' ? (existing.hongheQuantity || 0) + quantity : (existing.hongheQuantity || 0),
-        longhuaQuantity: campus === 'longhua' ? (existing.longhuaQuantity || 0) + quantity : (existing.longhuaQuantity || 0),
-        remainingStock: newTotalIn - (existing.totalOut || 0),
+        campus, year, term, grade, subject, campusName, bookName,
+        // 传入累加增量：localOnlyUpsertStock(mode=merge) 会自己处理 +=
+        totalIn: qtyDelta,
+        totalQuantity: qtyDelta,
+        hongheQuantity: campus === 'honghe' ? qtyDelta : 0,
+        longhuaQuantity: campus === 'longhua' ? qtyDelta : 0,
+        remainingStock: qtyDelta,
         updateTime: now
-      } as StockItem
-      try {
-        const r = await withTimeout<any>(
-          ds.upsertStock(saved),
-          6000, { success: false, error: 'upsertStock(累加) 超时（超过6秒未响应，已跳过以保证不卡死）' },
-          `upsertStock(累加 ${campusName}-${bookName})`
-        )
-        if (r && r.success === false) throw new Error(r.error || '写入库存失败')
-      } catch (e) {
-        console.warn('[导入] upsertStock(累加)失败，但已在本地内存更新：', campus, bookName, e)
-        throw e
-      }
+      }, 'merge')
+      // 修正：上面 localOnlyUpsertStock(merge) 是在本地存量上累加，但我们想基于 existing 预先计算 totalIn/remaining 以便返回给 caller 一致，
+      // 所以读回最新值即可（localOnlyUpsertStock 已返回合并后的 saved）
+      void newTotalIn
     }
     // 更新内存里的同一条，保证后续相同书本仍在同一批次导入时，查找命中的是最新值
     const idx = stockList.findIndex(s => s._id === existing!._id)
     if (idx >= 0) stockList[idx] = saved
   } else {
-    const payload: StockItem = {
+    const payload: Partial<StockItem> & { campus: string; year: string; term: string; grade: string; subject: string } = {
       _id: generateId(),
       campus,
       campusName,
@@ -1103,19 +1091,8 @@ const updateOrCreateStockPreloaded = async (
       remainingStock: quantity,
       createTime: now,
       updateTime: now
-    } as StockItem
-    try {
-      const r = await withTimeout<any>(
-        ds.upsertStock(payload),
-        6000, { success: false, error: 'upsertStock(新增) 超时（超过6秒未响应，已跳过以保证不卡死）' },
-        `upsertStock(新增 ${campusName}-${bookName})`
-      )
-      if (r && r.success === false) throw new Error(r.error || '写入库存失败')
-    } catch (e) {
-      console.warn('[导入] upsertStock(新增)失败，但已在本地内存更新：', campus, bookName, e)
-      throw e
     }
-    saved = payload
+    saved = localOnlyUpsertStock(payload, mode === 'overwrite' ? 'overwrite' : 'merge')
     stockList.push(saved)
   }
 
@@ -1123,7 +1100,7 @@ const updateOrCreateStockPreloaded = async (
   if (quantity > 0 && mode === 'merge') {
     const userInfo = getUserInfo()
     try {
-      await withTimeout(ds.addLog({
+      localOnlyAddLog({
         stockId: existing?._id || saved?._id || '',
         type: 'stock_in',
         operator: userInfo?.userName || userInfo?.nickName || '管理员',
@@ -1135,12 +1112,14 @@ const updateOrCreateStockPreloaded = async (
         quantity,
         note: '批量导入',
         createTime: now
-      }), 6000, null, `addLog(${campusName}-${bookName})`)
+      })
     } catch (e) {
       // 日志失败不影响主流程，只 warn
       console.warn('[导入] 写入入库日志失败，不影响库存结果：', campus, bookName, e)
     }
   }
+
+  return saved
 }
 
 // 保留旧签名（其他地方如果有调用也兼容）

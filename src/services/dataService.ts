@@ -1450,6 +1450,128 @@ export const clearAllData = async () => {
 // ==================== 导出本地存储工具（供 mockData.ts 使用）====================
 export { localGetStockData, localSetStockData, localGetLogData, localSetLogData, localGetForecastData, localSetForecastData, localGenerateId }
 
+// ==================== 【本地专用导入加速】纯 localStorage 同步版写函数 ====================
+// 用途：批量导入时不做任何 await isReallyOnline()/Supabase 调用，先毫秒级写本地保证秒级弹窗反馈，
+//      最后统一调 syncLocalToCloud() 异步兜底云同步（不阻塞 UI）。
+//      每一个函数都对应异步版本（addBook/deleteBook/upsertStock/addLog）的「本地写入那半段」逻辑。
+
+/** 同步本地：新增一本书（仅写 localStorage），返回处理后的 book */
+export const localOnlyAddBook = (book: any): any => {
+  const list = getBookList()
+  list.push(book)
+  setBookList(list)
+  return book
+}
+
+/** 同步本地：按 year/term/grade/subject/difficulty 删除书本+库存+日志+预测（仅写 localStorage） */
+export const localOnlyDeleteBook = (year: string, term: string, grade: string, subject: string, difficulty: string) => {
+  const diffVal = difficulty || null
+  const normalizedDiff = (d: any) => (d === '' || d === undefined || d === null) ? null : d
+
+  const bookList = getBookList()
+  const newList = bookList.filter((b: BookItem) =>
+    !((b as any).year === year && (b as any).term === term && b.grade === grade && b.subject === subject && normalizedDiff(b.difficulty) === diffVal)
+  )
+  setBookList(newList)
+
+  const stockList = localGetStockData()
+  const newStock = stockList.filter((s: StockItem) =>
+    !(s.year === year && s.term === term && s.grade === grade && s.subject === subject && normalizedDiff(s.difficulty) === diffVal)
+  )
+  localSetStockData(newStock)
+
+  const logList = localGetLogData()
+  const newLogs = logList.filter((l: LogItem) =>
+    !(l.year === year && l.term === term && l.grade === grade && l.subject === subject && normalizedDiff(l.difficulty) === diffVal)
+  )
+  localSetLogData(newLogs)
+
+  const forecastList = localGetForecastData()
+  const newForecasts = forecastList.filter((f: ForecastItem) =>
+    !(f.year === year && f.term === term && f.grade === grade && f.subject === subject && normalizedDiff(f.difficulty) === diffVal)
+  )
+  localSetForecastData(newForecasts)
+}
+
+/** 同步本地：新增或更新一条库存（仅写 localStorage），mode='merge'累加 / 'overwrite'覆盖 */
+export const localOnlyUpsertStock = (
+  stock: Partial<StockItem> & { campus: string; year: string; term: string; grade: string; subject: string; totalIn?: number; totalOut?: number; totalQuantity?: number; remainingStock?: number; createTime?: number; updateTime?: number },
+  mode: 'merge' | 'overwrite' = 'merge'
+): StockItem => {
+  const list = localGetStockData()
+  const idx = list.findIndex((s: StockItem) =>
+    s.campus === stock.campus && s.year === stock.year && s.term === stock.term &&
+    s.grade === stock.grade && s.subject === stock.subject && s.difficulty === stock.difficulty
+  )
+  let saved: StockItem
+  if (idx >= 0) {
+    const existing = list[idx]
+    if (mode === 'overwrite') {
+      saved = {
+        ...existing,
+        totalIn: stock.totalIn ?? stock.totalQuantity ?? existing.totalIn ?? 0,
+        totalOut: existing.totalOut ?? 0,
+        totalQuantity: stock.totalQuantity ?? existing.totalQuantity ?? 0,
+        hongheQuantity: stock.hongheQuantity ?? existing.hongheQuantity ?? 0,
+        longhuaQuantity: stock.longhuaQuantity ?? existing.longhuaQuantity ?? 0,
+        remainingStock: stock.remainingStock ?? Math.max(0, (stock.totalIn ?? stock.totalQuantity ?? existing.totalIn ?? 0) - (existing.totalOut ?? 0)),
+        updateTime: stock.updateTime ?? existing.updateTime ?? Date.now()
+      } as StockItem
+    } else {
+      const qtyDelta = stock.totalIn ?? stock.totalQuantity ?? 0
+      const newTotalIn = (existing.totalIn ?? 0) + qtyDelta
+      saved = {
+        ...existing,
+        totalIn: newTotalIn,
+        totalQuantity: (existing.totalQuantity ?? 0) + qtyDelta,
+        hongheQuantity: (existing.hongheQuantity ?? 0) + (stock.hongheQuantity ?? 0),
+        longhuaQuantity: (existing.longhuaQuantity ?? 0) + (stock.longhuaQuantity ?? 0),
+        remainingStock: newTotalIn - (existing.totalOut ?? 0),
+        updateTime: stock.updateTime ?? Date.now()
+      } as StockItem
+    }
+    list[idx] = saved
+  } else {
+    const qty = stock.totalIn ?? stock.totalQuantity ?? 0
+    saved = {
+      _id: stock._id || localGenerateId(),
+      campus: stock.campus,
+      campusName: stock.campusName || '',
+      year: stock.year,
+      term: stock.term,
+      grade: stock.grade,
+      subject: stock.subject,
+      difficulty: stock.difficulty || '',
+      bookName: stock.bookName || '',
+      bookCode: stock.bookCode || '',
+      totalQuantity: stock.totalQuantity ?? qty,
+      hongheQuantity: stock.hongheQuantity ?? (stock.campus === 'honghe' ? qty : 0),
+      longhuaQuantity: stock.longhuaQuantity ?? (stock.campus === 'longhua' ? qty : 0),
+      totalIn: stock.totalIn ?? qty,
+      totalOut: stock.totalOut ?? 0,
+      remainingStock: stock.remainingStock ?? qty,
+      createTime: stock.createTime ?? Date.now(),
+      updateTime: stock.updateTime ?? Date.now()
+    } as StockItem
+    list.push(saved)
+  }
+  localSetStockData(list)
+  return saved
+}
+
+/** 同步本地：写入一条入库日志（仅写 localStorage）*/
+export const localOnlyAddLog = (log: Partial<LogItem>): LogItem => {
+  const list = localGetLogData()
+  const saved = {
+    _id: localGenerateId(),
+    ...log,
+    createTime: log.createTime ?? Date.now()
+  } as LogItem
+  list.push(saved)
+  localSetLogData(list)
+  return saved
+}
+
 // ==================== 实时同步（Supabase Realtime）====================
 // 订阅库存变化，当其他设备修改库存时自动刷新
 export const subscribeToStockChanges = (callback: () => void) => {
