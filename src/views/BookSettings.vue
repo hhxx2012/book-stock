@@ -560,28 +560,60 @@ const downloadTemplate = () => {
 }
 
 const triggerImport = () => {
-  // 防止用户在 grade/subject/difficulty 尚未初始化（空数组）时导入——
-  // 此时点击按钮无反应会让用户困惑，这里主动重新加载一次基础数据
-  if (!gradeList.value.length || !subjectList.value.length || !difficultyList.value.length) {
-    alert('📋 正在加载年级/科目/难度配置，请稍候 2-3 秒再点击导入...');
-    (async () => {
-      try {
-        await Promise.all([loadGrades(), loadSubjects(), loadDifficulties()]);
-        alert('✅ 基础配置加载完毕，可以继续点击「批量导入」了！');
-      } catch (e) {
-        alert('❌ 基础配置加载失败，请刷新页面：' + (e as Error).message);
-      }
-    })();
-    return;
+  // —— 关键修复 1：保证无论如何都弹出文件选择框 ——
+  // 优先使用 template 里绑定好的 ref；如果 ref 没绑定好（null/undefined），
+  // 就 querySelector 兜底；再不行就创建临时 <input type="file" accept=".csv"> 直接 click（最可靠）
+  let inputEl: HTMLInputElement | null | undefined = fileInput.value;
+  if (!inputEl) {
+    inputEl = document.querySelector('input.bs-file-input') as HTMLInputElement | null;
   }
-  fileInput.value?.click();
+  if (!inputEl) {
+    inputEl = document.createElement('input');
+    inputEl.type = 'file';
+    inputEl.accept = '.csv,text/csv';
+    inputEl.style.display = 'none';
+    inputEl.className = 'bs-file-input bs-file-input-fallback';
+    inputEl.addEventListener('change', (evt: Event) => {
+      handleFileImport(evt).finally(() => {
+        if (inputEl && inputEl.parentNode) inputEl.parentNode.removeChild(inputEl);
+      });
+    }, { once: true });
+    document.body.appendChild(inputEl);
+  }
+  // 同步 click，确保处于"用户手势栈"中，浏览器不会阻止弹窗
+  try { inputEl.click(); }
+  catch (e) {
+    console.error('[triggerImport] 无法触发文件选择框:', e);
+    alert('❌ 无法打开文件选择框，请刷新页面重试。');
+  }
 };
 
 const handleFileImport = async (event: Event) => {
-  const target = event.target as HTMLInputElement;
+  const target = event.target as HTMLInputElement | null;
+  if (!target) return;
   const file = target.files?.[0];
-  target.value = ''; // 每次清理，允许连续选同文件也触发 change
+  // 无论成功失败，先把 value 清了，允许下次选同一个文件再次触发 change
+  try { target.value = ''; } catch {}
   if (!file) return;
+
+  // —— 关键修复 2：禁止 xlsx/xls，明确提示需要 CSV（避免把二进制 xlsx 当文本读，全是乱码导致用户以为没反应）
+  const name = file.name || '';
+  const low = name.toLowerCase();
+  if (low.endsWith('.xlsx') || low.endsWith('.xls') || low.endsWith('.xlsm')) {
+    alert(
+      '⚠️  你选择的是 Excel 文件（.xlsx / .xls），系统只支持 CSV 格式导入。\n\n' +
+      '操作步骤：\n' +
+      '1) 用 Excel / WPS 打开 .xlsx 文件\n' +
+      '2) 点击「文件」→「另存为」\n' +
+      '3) 保存类型选择「CSV UTF-8(逗号分隔)(*.csv)」\n' +
+      '4) 用保存好的 CSV 文件重新导入。'
+    );
+    return;
+  }
+  if (!low.endsWith('.csv')) {
+    alert('⚠️  请选择后缀为 .csv 的文件（不支持其他格式）。');
+    return;
+  }
 
   try {
     // 先用 UTF-8 读取
@@ -590,14 +622,11 @@ const handleFileImport = async (event: Event) => {
     // 检测是否有乱码（如果包含替换字符，尝试 GBK 解码）
     let finalText = text;
     if (text.includes('\uFFFD')) {
-      // UTF-8 解码失败，可能是 GBK 编码
       try {
         const buffer = await file.arrayBuffer();
-        // 使用 TextDecoder 尝试 GBK 解码
         const decoder = new TextDecoder('gbk');
         finalText = decoder.decode(buffer);
       } catch {
-        // GBK 解码也失败，使用原始 UTF-8 文本
         finalText = text;
       }
     }
@@ -605,7 +634,7 @@ const handleFileImport = async (event: Event) => {
     await parseCSV(finalText);
   } catch (e) {
     console.error('[导入] 读取文件失败:', e);
-    alert('❌ 读取文件失败：\n\n' + (e as Error).message + '\n\n请尝试用 Excel 重新「另存为 CSV」格式，或刷新页面重试。');
+    alert('❌ 读取文件失败：\n\n' + (e as Error).message + '\n\n请尝试用 Excel 重新「另存为 CSV（UTF-8 逗号分隔）」格式，或刷新页面重试。');
   }
 };
 
@@ -663,9 +692,13 @@ const parseCSV = async (text: string) => {
       return
     }
 
-    // 确保 grade/subject/difficulty 有值（避免页面初始化没执行完导致校验全失败）
-    if (!gradeList.value.length || !subjectList.value.length || !difficultyList.value.length) {
-      await Promise.all([loadGrades(), loadSubjects(), loadDifficulties()])
+    // （storage.ts 已固定年级/科目/难度为默认值，不从 localStorage 读，所以这里一定有值。
+    //  保留安全 fallback：万一 storage 层改了导致列表为空，直接跳过校验，避免误拦有效导入）
+    const hasValidLists = gradeList.value.length && subjectList.value.length && difficultyList.value.length
+    if (hasValidLists) {
+      try {
+        await Promise.all([loadGrades(), loadSubjects(), loadDifficulties()])
+      } catch {}
     }
 
     // 获取系统配置的年级、科目、难度列表（用于校验）
@@ -891,8 +924,15 @@ const parseCSV = async (text: string) => {
     }
 
     const { total, success, skipped, errors } = importResult.value
+    // —— 关键修复：先弹结果窗，再去 loadBooks
+    // 即使 loadBooks/syncLocalToCloud 挂起超时，用户至少能看到导入成功/失败的结果，不会以为"没反应"
     showImportModal.value = true
-    await loadBooks()
+
+    try {
+      await withTimeout(loadBooks(), 10000, null, 'loadBooks(导入完成刷新)')
+    } catch (e) {
+      console.warn('[导入] 刷新列表失败，不影响导入结果：', e)
+    }
 
     // 如果 0 成功 + 0 跳过 + 有错误，额外弹窗告知用户（避免用户觉得"没反应"）
     if (success === 0 && skipped === 0 && errors.length > 0) {
@@ -903,7 +943,7 @@ const parseCSV = async (text: string) => {
   } catch (e) {
     console.error('[parseCSV] 导入过程异常：', e)
     alert('❌ 导入过程出错：\n\n' + (e as Error).message + '\n\n请关闭页面重试，或截图此消息联系技术支持。')
-    // 无论如何，让 importModal 里能看到错误明细（用户之前看不到）
+    // 无论如何，让 importModal 里能看到错误明细
     showImportModal.value = true
   }
 }
@@ -1043,6 +1083,7 @@ const closeImportModal = () => {
         type="file" 
         ref="fileInput" 
         accept=".csv" 
+        class="bs-file-input"
         style="display: none" 
         @change="handleFileImport"
       />
