@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>书本管理系统 - 3步上线</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Microsoft YaHei', sans-serif;
+  background: #f0f2f5;
+  color: #333;
+  padding: 16px;
+}
+.container { max-width: 700px; margin: 0 auto; }
+.header {
+  background: linear-gradient(135deg, #3ecf8e 0%, #2da76d 100%);
+  color: #fff; padding: 28px 20px; border-radius: 14px;
+  text-align: center; margin-bottom: 20px;
+}
+.header h1 { font-size: 22px; margin-bottom: 6px; }
+.header p { font-size: 14px; opacity: 0.9; }
+
+.step { margin-bottom: 16px; }
+.step-head {
+  background: #fff; border-radius: 12px; padding: 16px 18px;
+  display: flex; align-items: center; gap: 14px; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.step-num {
+  width: 38px; height: 38px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: bold; font-size: 18px; flex-shrink: 0;
+}
+.step1 .step-num { background: #e6f7ff; color: #1890ff; }
+.step2 .step-num { background: #fff7e6; color: #fa8c16; }
+.step3 .step-num { background: #f6ffed; color: #52c41a; }
+.step-info { flex: 1; }
+.step-info h3 { font-size: 16px; margin-bottom: 4px; }
+.step-info p { font-size: 13px; color: #888; }
+.step-arrow { color: #bbb; font-size: 18px; transition: 0.3s; }
+.step.open .step-arrow { transform: rotate(180deg); }
+
+.step-body { display: none; background: #fff; padding: 0 18px 18px; border-radius: 0 0 12px 12px; margin-top: -4px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+.step.open .step-body { display: block; }
+
+.step-body img { max-width: 100%; border-radius: 8px; border: 1px solid #e8e8e8; margin: 10px 0; }
+.step-body .action { margin: 12px 0; }
+.step-body .action a {
+  display: inline-block; padding: 10px 24px; border-radius: 8px;
+  text-decoration: none; font-size: 14px; font-weight: bold; color: #fff;
+}
+.btn-blue { background: #1890ff; }
+.btn-green { background: #52c41a; }
+.btn-orange { background: #fa8c16; }
+
+.code-box {
+  background: #1e1e1e; color: #ccc; padding: 14px 16px;
+  border-radius: 8px; font-family: 'Consolas','Monaco',monospace;
+  font-size: 12px; line-height: 1.6; margin: 10px 0; overflow-x: auto;
+  max-height: 300px; overflow-y: auto;
+}
+.code-box .c { color: #6a9955; }
+.code-box .k { color: #569cd6; }
+.code-box .s { color: #ce9178; }
+
+.copy-btn {
+  display: inline-block; padding: 6px 16px; background: #1890ff;
+  color: #fff; border: none; border-radius: 6px; font-size: 13px;
+  cursor: pointer; margin-bottom: 8px;
+}
+.copy-btn:active { background: #096dd9; }
+
+.tip {
+  background: #e6f7ff; border-left: 4px solid #1890ff;
+  padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 10px 0;
+  font-size: 13px;
+}
+.final {
+  background: #f6ffed; border: 1px solid #b7eb8f; border-radius: 12px;
+  padding: 20px; text-align: center; margin-top: 20px;
+}
+.final h2 { color: #52c41a; font-size: 20px; margin-bottom: 8px; }
+.final p { color: #666; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="header">
+  <h1>📚 书本管理系统 · 3步上线</h1>
+  <p>全程免费，约10分钟完成</p>
+</div>
+
+<!-- 第1步 -->
+<div class="step step1 open">
+  <div class="step-head" onclick="this.parentElement.classList.toggle('open')">
+    <div class="step-num">1</div>
+    <div class="step-info">
+      <h3>创建 Supabase 数据库（免费）</h3>
+      <p>创建云端数据库，存所有书本数据</p>
+    </div>
+    <div class="step-arrow">▼</div>
+  </div>
+  <div class="step-body">
+    <div class="action">
+      <a href="https://supabase.com" target="_blank" class="btn-blue">👉 打开 Supabase 注册</a>
+    </div>
+    <p>用 GitHub 账号登录（没有的话点 Sign Up 用邮箱注册）。</p>
+    <p>点击 <b>New project</b> → 输入项目名（如 <code>book-system</code>）→ 设置数据库密码（记下来！）→ 区域选 <b>Singapore</b> → 点 <b>Create new project</b>（等待1-2分钟）。</p>
+    <div class="tip">💡 免费版有 500MB 空间，台本系统足够用很多年。</div>
+    
+    <p style="margin-top:14px;font-weight:bold;">创建完成后，获取两个关键信息：</p>
+    <p>左侧菜单 → <b>Settings → API</b>，找到：</p>
+    <ul style="padding-left:20px;margin:8px 0;">
+      <li><b>Project URL</b>（https://xxxxx.supabase.co）</li>
+      <li><b>anon public key</b>（一长串 eyJ...开头的字符）</li>
+    </ul>
+    <p style="color:#fa8c16;font-size:13px;">⚠️ 把这两个值复制到记事本，第3步要用。</p>
+
+    <p style="margin-top:14px;font-weight:bold;">然后，创建数据库表：</p>
+    <p>左侧菜单 → <b>SQL Editor → New query</b> → 把下面的 SQL 全部粘贴进去 → 点 <b>Run</b>：</p>
+    <button class="copy-btn" onclick="copySQL()">📋 一键复制 SQL</button>
+    <div class="code-box" id="sql-code"><span class="c">-- 复制全部内容到 Supabase SQL Editor 执行</span>
+<span class="k">CREATE TABLE IF NOT EXISTS</span> users (
+  id <span class="k">UUID PRIMARY KEY DEFAULT</span> gen_random_uuid(),
+  user_name <span class="k">TEXT NOT NULL</span>,
+  nick_name <span class="k">TEXT NOT NULL</span>,
+  role <span class="k">TEXT NOT NULL DEFAULT</span> <span class="s">'teacher'</span>,
+  campus <span class="k">TEXT NOT NULL DEFAULT</span> <span class="s">'honghe'</span>,
+  roles <span class="k">TEXT[] DEFAULT ARRAY</span>[<span class="s">'teacher'</span>],
+  campuses <span class="k">TEXT[] DEFAULT ARRAY</span>[<span class="s">'honghe'</span>],
+  created_at <span class="k">TIMESTAMPTZ DEFAULT NOW</span>()
+);
+
+<span class="k">CREATE TABLE IF NOT EXISTS</span> roles (
+  id <span class="k">UUID PRIMARY KEY DEFAULT</span> gen_random_uuid(),
+  role <span class="k">TEXT UNIQUE NOT NULL</span>,
+  label <span class="k">TEXT NOT NULL</span>,
+  permissions <span class="k">TEXT[] DEFAULT ARRAY</span>[]::<span class="k">TEXT</span>[]
+);
+
+<span class="k">CREATE TABLE IF NOT EXISTS</span> role_permissions (
+  id <span class="k">UUID PRIMARY KEY DEFAULT</span> gen_random_uuid(),
+  role <span class="k">TEXT UNIQUE NOT NULL</span>,
+  permissions <span class="k">TEXT[] DEFAULT ARRAY</span>[]::<span class="k">TEXT</span>[]
+);
+
+<span class="k">CREATE TABLE IF NOT EXISTS</span> grades (id <span class="k">UUID PRIMARY KEY DEFAULT</span> gen_random_uuid(), name <span class="k">TEXT UNIQUE NOT NULL</span>, sort_order <span class="k">INTEGER DEFAULT</span> 0);
+<span class="k">CREATE TABLE IF NOT EXISTS</span> subjects (id <span class="k">UUID PRIMARY KEY DEFAULT</span> gen_random_uuid(), name <span class="k">TEXT UNIQUE NOT NULL</span>, sort_order <span class="k">INTEGER DEFAULT</span> 0);
+<span class="k">CREATE TABLE IF NOT EXISTS</span> difficulties (id <span class="k">UUID PRIMARY KEY DEFAULT</span> gen_random_uuid(), name <span class="k">TEXT UNIQUE NOT NULL</span>, sort_order <span class="k">INTEGER DEFAULT</span> 0);
+
+<span class="k">CREATE TABLE IF NOT EXISTS</span> books (
+  id <span class="k">UUID PRIMARY KEY DEFAULT</span> gen_random_uuid(),
+  book_name <span class="k">TEXT NOT NULL</span>, year <span class="k">TEXT NOT NULL</span>, term <span class="k">TEXT NOT NULL</span>,
+  grade <span class="k">TEXT NOT NULL</span>, subject <span class="k">TEXT NOT NULL</span>, difficulty <span class="k">TEXT</span>,
+  total_quantity <span class="k">INTEGER DEFAULT</span> 0, honghe_quantity <span class="k">INTEGER DEFAULT</span> 0, longhua_quantity <span class="k">INTEGER DEFAULT</span> 0,
+  created_at <span class="k">TIMESTAMPTZ DEFAULT NOW</span>(), <span class="k">UNIQUE</span>(year, term, grade, subject, difficulty)
+);
+
+<span class="k">CREATE TABLE IF NOT EXISTS</span> stock (
+  id <span class="k">UUID PRIMARY KEY DEFAULT</span> gen_random_uuid(),
+  campus <span class="k">TEXT NOT NULL</span>, year <span class="k">TEXT NOT NULL</span>, term <span class="k">TEXT NOT NULL</span>,
+  grade <span class="k">TEXT NOT NULL</span>, subject <span class="k">TEXT NOT NULL</span>, difficulty <span class="k">TEXT</span>,
+  book_name <span class="k">TEXT NOT NULL</span>, total_quantity <span class="k">INTEGER DEFAULT</span> 0,
+  honghe_quantity <span class="k">INTEGER DEFAULT</span> 0, longhua_quantity <span class="k">INTEGER DEFAULT</span> 0,
+  total_in <span class="k">INTEGER DEFAULT</span> 0, total_out <span class="k">INTEGER DEFAULT</span> 0, remaining_stock <span class="k">INTEGER DEFAULT</span> 0,
+  created_at <span class="k">TIMESTAMPTZ DEFAULT NOW</span>(), <span class="k">UNIQUE</span>(campus, year, term, grade, subject, difficulty)
+);
+
+<span class="k">CREATE TABLE IF NOT EXISTS</span> forecasts (
+  id <span class="k">UUID PRIMARY KEY DEFAULT</span> gen_random_uuid(),
+  type <span class="k">TEXT NOT NULL DEFAULT</span> <span class="s">'forecast'</span>, book_name <span class="k">TEXT</span>,
+  year <span class="k">TEXT</span>, term <span class="k">TEXT</span>, grade <span class="k">TEXT</span>, subject <span class="k">TEXT</span>, difficulty <span class="k">TEXT</span>,
+  campus <span class="k">TEXT</span>, quantity <span class="k">INTEGER DEFAULT</span> 0, remark <span class="k">TEXT</span>,
+  status <span class="k">TEXT DEFAULT</span> <span class="s">'pending'</span>, operator <span class="k">TEXT</span>, created_at <span class="k">TIMESTAMPTZ DEFAULT NOW</span>()
+);
+
+<span class="k">CREATE TABLE IF NOT EXISTS</span> logs (
+  id <span class="k">UUID PRIMARY KEY DEFAULT</span> gen_random_uuid(),
+  type <span class="k">TEXT NOT NULL</span>, operator <span class="k">TEXT</span>, action <span class="k">TEXT</span>,
+  year <span class="k">TEXT</span>, term <span class="k">TEXT</span>, grade <span class="k">TEXT</span>, subject <span class="k">TEXT</span>, difficulty <span class="k">TEXT</span>,
+  campus <span class="k">TEXT</span>, book_name <span class="k">TEXT</span>, quantity <span class="k">INTEGER DEFAULT</span> 0, note <span class="k">TEXT</span>,
+  created_at <span class="k">TIMESTAMPTZ DEFAULT NOW</span>()
+);
+
+<span class="k">CREATE TABLE IF NOT EXISTS</span> system_settings (
+  id <span class="k">UUID PRIMARY KEY DEFAULT</span> gen_random_uuid(),
+  key <span class="k">TEXT UNIQUE NOT NULL</span>, value <span class="k">TEXT</span>
+);
+
+<span class="c">-- 默认数据</span>
+<span class="k">INSERT INTO</span> roles (role, label, permissions) <span class="k">VALUES</span>
+  (<span class="s">'super'</span>,<span class="s">'超级管理员'</span>,<span class="k">ARRAY</span>[<span class="s">'view_stock'</span>,<span class="s">'stock_in'</span>,<span class="s">'stock_out'</span>,<span class="s">'delete_book'</span>,<span class="s">'forecast_view'</span>,<span class="s">'forecast_set'</span>,<span class="s">'forecast_approve'</span>,<span class="s">'forecast_modify'</span>,<span class="s">'forecast_delete'</span>,<span class="s">'forecast_stats'</span>,<span class="s">'receive_view'</span>,<span class="s">'receive_set'</span>,<span class="s">'receive_approve'</span>,<span class="s">'receive_modify'</span>,<span class="s">'receive_delete'</span>,<span class="s">'manage_books'</span>,<span class="s">'manage_users'</span>,<span class="s">'manage_roles'</span>,<span class="s">'manage_system'</span>,<span class="s">'view_stats'</span>,<span class="s">'qrcode_generate'</span>]),
+  (<span class="s">'admin'</span>,<span class="s">'管理员'</span>,<span class="k">ARRAY</span>[<span class="s">'view_stock'</span>,<span class="s">'stock_in'</span>,<span class="s">'stock_out'</span>,<span class="s">'delete_book'</span>,<span class="s">'forecast_view'</span>,<span class="s">'forecast_set'</span>,<span class="s">'forecast_approve'</span>,<span class="s">'forecast_modify'</span>,<span class="s">'forecast_stats'</span>,<span class="s">'receive_view'</span>,<span class="s">'receive_set'</span>,<span class="s">'receive_approve'</span>,<span class="s">'manage_books'</span>,<span class="s">'manage_users'</span>,<span class="s">'manage_system'</span>]),
+  (<span class="s">'educational'</span>,<span class="s">'教务'</span>,<span class="k">ARRAY</span>[<span class="s">'view_stock'</span>,<span class="s">'stock_in'</span>,<span class="s">'stock_out'</span>,<span class="s">'forecast_view'</span>,<span class="s">'forecast_set'</span>,<span class="s">'forecast_approve'</span>,<span class="s">'receive_view'</span>,<span class="s">'receive_approve'</span>]),
+  (<span class="s">'teacher'</span>,<span class="s">'教师'</span>,<span class="k">ARRAY</span>[<span class="s">'view_stock'</span>,<span class="s">'forecast_view'</span>,<span class="s">'receive_view'</span>])
+<span class="k">ON CONFLICT</span> (role) <span class="k">DO NOTHING</span>;
+
+<span class="k">INSERT INTO</span> grades (name, sort_order) <span class="k">VALUES</span>
+  (<span class="s">'幼小'</span>,0),(<span class="s">'1年级'</span>,1),(<span class="s">'2年级'</span>,2),(<span class="s">'3年级'</span>,3),(<span class="s">'4年级'</span>,4),(<span class="s">'5年级'</span>,5),(<span class="s">'6年级'</span>,6),(<span class="s">'初一'</span>,7),(<span class="s">'初二'</span>,8),(<span class="s">'初三'</span>,9)
+<span class="k">ON CONFLICT</span> (name) <span class="k">DO NOTHING</span>;
+
+<span class="k">INSERT INTO</span> subjects (name, sort_order) <span class="k">VALUES</span>
+  (<span class="s">'语文'</span>,1),(<span class="s">'数学'</span>,2),(<span class="s">'英语'</span>,3),(<span class="s">'物理'</span>,4),(<span class="s">'化学'</span>,5),(<span class="s">'生物'</span>,6),(<span class="s">'历史'</span>,7),(<span class="s">'地理'</span>,8),(<span class="s">'政治'</span>,9)
+<span class="k">ON CONFLICT</span> (name) <span class="k">DO NOTHING</span>;
+
+<span class="k">INSERT INTO</span> difficulties (name, sort_order) <span class="k">VALUES</span> (<span class="s">'基础'</span>,1),(<span class="s">'提升'</span>,2),(<span class="s">'竞赛'</span>,3) <span class="k">ON CONFLICT</span> (name) <span class="k">DO NOTHING</span>;
+<span class="k">INSERT INTO</span> system_settings (key, value) <span class="k">VALUES</span> (<span class="s">'default_year'</span>,<span class="s">'2026'</span>),(<span class="s">'default_term'</span>,<span class="s">'暑期'</span>) <span class="k">ON CONFLICT</span> (key) <span class="k">DO NOTHING</span>;</div>
+  </div>
+</div>
+
+<!-- 第2步 -->
+<div class="step step2">
+  <div class="step-head" onclick="this.parentElement.classList.toggle('open')">
+    <div class="step-num">2</div>
+    <div class="step-info">
+      <h3>配置项目连接 Supabase</h3>
+      <p>让项目知道数据库地址</p>
+    </div>
+    <div class="step-arrow">▼</div>
+  </div>
+  <div class="step-body">
+    <p>在项目根目录 <code>d:\小程序开发\h5-shubenxitong\</code> 下创建 <code>.env</code> 文件，写入以下内容：</p>
+    <div class="code-box"><span class="c"># 把下面的值替换成你在第1步记录的</span>
+VITE_SUPABASE_URL=https://你的项目ID.supabase.co
+VITE_SUPABASE_ANON_KEY=你的anon-key</div>
+    <button class="copy-btn" onclick="copyEnv()">📋 复制模板</button>
+    <div class="tip">💡 替换后重新运行 <code style="background:#eee;padding:2px 6px;border-radius:3px;">npm run build</code> 即可生成连接云端数据库的版本。</div>
+  </div>
+</div>
+
+<!-- 第3步 -->
+<div class="step step3">
+  <div class="step-head" onclick="this.parentElement.classList.toggle('open')">
+    <div class="step-num">3</div>
+    <div class="step-info">
+      <h3>部署到 Netlify（免费）</h3>
+      <p>获得一个网址，任何人打开都能用</p>
+    </div>
+    <div class="step-arrow">▼</div>
+  </div>
+  <div class="step-body">
+    <div class="action">
+      <a href="https://app.netlify.com" target="_blank" class="btn-green">👉 打开 Netlify 登录</a>
+    </div>
+    <p>用 GitHub 账号登录。然后两种方式任选：</p>
+    
+    <p style="font-weight:bold;margin-top:10px;">方式一：拖拽部署（最简单）</p>
+    <p>登录后，直接访问 <a href="https://app.netlify.com/drop" target="_blank">app.netlify.com/drop</a>，把本项目的 <code>dist</code> 文件夹拖进去，等几秒就完成了！</p>
+    
+    <p style="font-weight:bold;margin-top:10px;">方式二：Git 部署（推荐，自动更新）</p>
+    <ol style="padding-left:20px;margin:8px 0;">
+      <li>把项目推送到 GitHub 仓库</li>
+      <li>Netlify 中 → Add new site → Import an existing project → 选 GitHub</li>
+      <li>Build command: <code>npm run build</code>，Publish directory: <code>dist</code></li>
+      <li>展开 Environment Variables，添加：<br>
+        <code>VITE_SUPABASE_URL</code> = 你的Supabase URL<br>
+        <code>VITE_SUPABASE_ANON_KEY</code> = 你的anon key</li>
+      <li>点 Deploy site</li>
+    </ol>
+    
+    <div class="tip">💡 部署完成后，Netlify 会给你一个网址（如 <code>xxx.netlify.app</code>），把这个网址发给同事，大家就能一起用了！</div>
+  </div>
+</div>
+
+<div class="final">
+  <h2>✅ 完成！</h2>
+  <p>把 Netlify 给你的网址发给同事，所有人都能看到和操作同一份数据。</p>
+  <p style="margin-top:8px;font-size:13px;color:#888;">本地测试：<code>npm run dev</code> → 打开 http://localhost:5173</p>
+</div>
+
+</div>
+
+<script>
+function copySQL() {
+  const sql = document.getElementById('sql-code').textContent;
+  navigator.clipboard.writeText(sql).then(() => alert('✅ SQL 已复制！去 Supabase SQL Editor 粘贴执行'));
+}
+function copyEnv() {
+  navigator.clipboard.writeText('VITE_SUPABASE_URL=https://你的项目ID.supabase.co\nVITE_SUPABASE_ANON_KEY=你的anon-key').then(() => alert('✅ 模板已复制！替换为你的真实值后保存为 .env 文件'));
+}
+</script>
+</body>
+</html>

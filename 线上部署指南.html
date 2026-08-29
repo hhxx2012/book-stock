@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>书本管理系统 - 线上部署指南</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: #f5f7fa;
+      color: #333;
+      line-height: 1.8;
+      padding: 20px;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    .header {
+      background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
+      color: #fff;
+      padding: 40px 30px;
+      border-radius: 16px;
+      margin-bottom: 30px;
+      text-align: center;
+    }
+    .header h1 { font-size: 28px; margin-bottom: 10px; }
+    .header p { font-size: 15px; opacity: 0.9; }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 25px 30px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    }
+    .card h2 {
+      font-size: 20px;
+      color: #1890ff;
+      margin-bottom: 15px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #e6f7ff;
+    }
+    .step {
+      display: flex;
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+    .step-num {
+      flex-shrink: 0;
+      width: 36px;
+      height: 36px;
+      background: #1890ff;
+      color: #fff;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      font-size: 16px;
+    }
+    .step-body { flex: 1; }
+    .step-body h3 {
+      font-size: 16px;
+      margin-bottom: 8px;
+      color: #333;
+    }
+    .step-body p {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 8px;
+    }
+    .code-block {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 15px 20px;
+      border-radius: 8px;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 13px;
+      overflow-x: auto;
+      margin: 10px 0;
+      line-height: 1.6;
+    }
+    .code-block .comment { color: #6a9955; }
+    .code-block .keyword { color: #569cd6; }
+    .code-block .string { color: #ce9178; }
+    .tip {
+      background: #e6f7ff;
+      border-left: 4px solid #1890ff;
+      padding: 12px 16px;
+      border-radius: 0 8px 8px 0;
+      margin: 15px 0;
+      font-size: 14px;
+      color: #333;
+    }
+    .warning {
+      background: #fff2f0;
+      border-left: 4px solid #ff4d4f;
+      padding: 12px 16px;
+      border-radius: 0 8px 8px 0;
+      margin: 15px 0;
+      font-size: 14px;
+      color: #333;
+    }
+    .btn {
+      display: inline-block;
+      padding: 10px 24px;
+      background: #1890ff;
+      color: #fff;
+      text-decoration: none;
+      border-radius: 8px;
+      font-size: 14px;
+      margin-top: 10px;
+    }
+    .btn:hover { background: #096dd9; }
+    ul { padding-left: 20px; margin: 10px 0; }
+    li { margin-bottom: 6px; font-size: 14px; color: #555; }
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 15px;
+      margin-top: 15px;
+    }
+    .feature-item {
+      background: #f5f7fa;
+      padding: 15px;
+      border-radius: 8px;
+      text-align: center;
+    }
+    .feature-item .icon { font-size: 28px; margin-bottom: 8px; }
+    .feature-item .label { font-size: 14px; color: #333; font-weight: bold; }
+    .feature-item .desc { font-size: 12px; color: #888; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>📚 书本管理系统 - 线上部署指南</h1>
+      <p>将本地系统升级为多人共享的在线统计工具</p>
+    </div>
+
+    <div class="card">
+      <h2>🎯 部署前准备</h2>
+      <div class="feature-grid">
+        <div class="feature-item">
+          <div class="icon">☁️</div>
+          <div class="label">Supabase 账号</div>
+          <div class="desc">免费云端数据库</div>
+        </div>
+        <div class="feature-item">
+          <div class="icon">🌐</div>
+          <div class="label">Vercel 账号</div>
+          <div class="desc">免费前端托管</div>
+        </div>
+        <div class="feature-item">
+          <div class="icon">💻</div>
+          <div class="label">Node.js 环境</div>
+          <div class="desc">本地打包构建</div>
+        </div>
+        <div class="feature-item">
+          <div class="icon">📱</div>
+          <div class="label">浏览器访问</div>
+          <div class="desc">手机/电脑均可</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>📝 详细部署步骤</h2>
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h3>注册 Supabase 账号并创建项目</h3>
+          <p>访问 <a href="https://supabase.com" target="_blank">https://supabase.com</a>，使用 GitHub 或邮箱注册。</p>
+          <p>创建一个新项目，记住项目密码（数据库密码），选择离你最近的区域（如 Singapore 或 Tokyo）。</p>
+          <div class="tip">
+            Supabase 免费版包含：500MB 数据库空间、无限 API 请求、2GB 带宽，完全满足本系统需求。
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h3>获取项目连接信息</h3>
+          <p>进入项目后，点击左侧菜单 <strong>Project Settings → API</strong>，找到以下信息：</p>
+          <ul>
+            <li><strong>Project URL</strong>（如：https://xxxxxxxxxxxx.supabase.co）</li>
+            <li><strong>anon public</strong> API Key（以 eyJ 开头的一长串字符）</li>
+          </ul>
+          <div class="warning">
+            请妥善保管 anon key，不要泄露给不信任的人。它决定了谁能访问你的数据库。
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h3>创建数据库表结构</h3>
+          <p>点击左侧 <strong>SQL Editor → New query</strong>，把项目根目录下 <code>supabase/migrations.sql</code> 文件中的全部 SQL 复制粘贴进去，然后点击 <strong>Run</strong>。</p>
+          <p>这个 SQL 会创建以下数据表：</p>
+          <ul>
+            <li><code>users</code> - 用户表</li>
+            <li><code>roles</code> - 角色定义表</li>
+            <li><code>role_permissions</code> - 角色权限表</li>
+            <li><code>grades</code> - 年级列表</li>
+            <li><code>subjects</code> - 科目列表</li>
+            <li><code>difficulties</code> - 难度列表</li>
+            <li><code>books</code> - 书本信息表</li>
+            <li><code>stock</code> - 库存表</li>
+            <li><code>forecasts</code> - 预计/领取表</li>
+            <li><code>logs</code> - 操作日志表</li>
+            <li><code>system_settings</code> - 系统设置表</li>
+          </ul>
+          <div class="tip">
+            SQL 中已经预置了默认的年级、科目、难度数据和角色定义，执行后即可使用。
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <h3>配置环境变量</h3>
+          <p>在项目根目录创建 <code>.env</code> 文件（复制 .env.example），填入你的 Supabase 信息：</p>
+          <div class="code-block">
+VITE_SUPABASE_URL=https://你的项目ID.supabase.co
+VITE_SUPABASE_ANON_KEY=你的anon-key</div>
+          <div class="warning">
+            不要把 <code>.env</code> 文件提交到 Git！系统已经配置了 <code>.gitignore</code>，但请再确认一次。
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <h3>本地测试在线模式</h3>
+          <p>配置好环境变量后，在本地运行：</p>
+          <div class="code-block">
+npm install
+npm run dev</div>
+          <p>打开浏览器访问 <code>http://localhost:5173</code>，此时系统会自动检测到 Supabase 配置，所有数据操作都会同步到云端数据库。</p>
+          <div class="tip">
+            如果删除 <code>.env</code> 文件或清空两个变量，系统会自动回退到本地 localStorage 模式，方便测试。
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <h3>部署到 Vercel（免费托管）</h3>
+          <p><strong>方式一：Git 部署（推荐）</strong></p>
+          <ol>
+            <li>将项目推送到 GitHub 仓库</li>
+            <li>访问 <a href="https://vercel.com" target="_blank">https://vercel.com</a>，导入该仓库</li>
+            <li>在 Vercel 的 Environment Variables 中添加：<code>VITE_SUPABASE_URL</code> 和 <code>VITE_SUPABASE_ANON_KEY</code></li>
+            <li>点击 Deploy，等待构建完成</li>
+          </ol>
+          <p><strong>方式二：手动部署</strong></p>
+          <div class="code-block">
+npm run build
+<span class="comment"># 然后将 dist/ 文件夹内容上传到任何静态托管服务</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>🔐 权限与多用户说明</h2>
+      <p>本系统采用<strong>角色权限制</strong>，Supabase 在线模式下仍然保留本地原有的权限体系：</p>
+      <ul>
+        <li><strong>超级管理员</strong>：拥有所有权限，可管理用户、角色、系统设置</li>
+        <li><strong>管理员</strong>：可管理书本、库存、预计、领取</li>
+        <li><strong>教务员</strong>：可管理自己校区的库存和预计</li>
+        <li><strong>教师</strong>：可查看库存、提交预计/领取申请</li>
+      </ul>
+      <div class="tip">
+        当前版本使用基于角色的访问控制，所有用户共享同一套数据。后续如需接入微信登录，可在 Supabase Auth 中配置 OAuth Provider。
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>⚠️ 注意事项</h2>
+      <ul>
+        <li>Supabase 免费版数据库有 500MB 限制，对于书本管理系统来说足够使用数年</li>
+        <li>如果不再使用在线模式，直接删除 <code>.env</code> 文件即可回退到本地模式，数据互不影响</li>
+        <li>在线模式下，所有用户看到的数据是实时同步的，无需手动刷新</li>
+        <li>建议定期在 Supabase Dashboard 中备份数据（Table Editor → 各表 → Export）</li>
+        <li>如需限制数据库访问权限，可在 Supabase 的 Row Level Security (RLS) 中配置更细粒度的规则</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>📂 项目文件变更清单</h2>
+      <p>本次升级新增/修改了以下文件：</p>
+      <ul>
+        <li><code>src/services/dataService.ts</code> - 新增：在线/离线双模式数据服务层</li>
+        <li><code>src/utils/supabase.ts</code> - 新增：Supabase 客户端配置</li>
+        <li><code>supabase/migrations.sql</code> - 新增：完整数据库迁移脚本</li>
+        <li><code>.env.example</code> - 新增：环境变量模板</li>
+        <li><code>src/utils/mockData.ts</code> - 修改：核心函数支持在线/离线自动切换</li>
+        <li><code>src/views/Stock.vue</code> - 修改：使用 async 数据操作</li>
+        <li><code>src/views/Forecast.vue</code> - 修改：使用 async 数据操作</li>
+        <li><code>src/views/BookSettings.vue</code> - 修改：使用 async 数据操作</li>
+        <li><code>src/views/SystemSettings.vue</code> - 修改：清除数据支持在线模式</li>
+      </ul>
+    </div>
+
+    <div style="text-align: center; padding: 30px; color: #888; font-size: 14px;">
+      <p>书本管理系统 v1.0 - 线上部署指南</p>
+      <p>如有问题，请检查浏览器控制台 (F12) 中的网络请求错误信息</p>
+    </div>
+  </div>
+</body>
+</html>
