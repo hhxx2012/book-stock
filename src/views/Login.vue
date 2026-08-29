@@ -127,6 +127,19 @@ const ensurePermanentAdmin = () => {
   }
 }
 
+// ==================== 通用：Promise 超时保护 ====================
+const withTimeout = <T,>(promise: Promise<T>, ms: number, fallback: T | null = null, desc = 'operation'): Promise<T | null> => {
+  return Promise.race([
+    promise,
+    new Promise<T | null>((resolve) => {
+      setTimeout(() => {
+        console.warn(`[超时] ${desc} 超过 ${ms}ms，跳过继续`)
+        resolve(fallback)
+      }, ms)
+    })
+  ])
+}
+
 onMounted(async () => {
   initRoles()
   loadRemember()
@@ -139,10 +152,10 @@ onMounted(async () => {
   
   // 本地没有用户，尝试连接云端检查（只要配置了 Supabase，就算在线，不需要 auth session）
   if (!hasUsers && isSupabaseConfigured()) {
-    // 尝试连接共享账号（仅用于后台认证，不影响在线模式判断）
-    try { await connectToCloud() } catch {}
+    // 尝试连接共享账号（仅用于后台认证，不影响在线模式判断，加超时保护）
+    await withTimeout((async () => { try { await connectToCloud() } catch {} })(), 5000, null, 'connectToCloud(onMounted)')
     try {
-      const cloudUsers = await fetchUsers()
+      const cloudUsers = await withTimeout(fetchUsers(), 8000, [], 'fetchUsers(onMounted)') as any[]
       if (cloudUsers && cloudUsers.length > 0) {
         hasUsers = true
         // 缓存到本地，下次登录更快
@@ -203,14 +216,13 @@ const doInit = async () => {
     setCampusName('全部校区')
     setUserInfo({ ...userData, role: 'super', campus: 'all', campusName: '全部校区' })
 
-    // 只要配置了 Supabase 就算在线（不需要 auth session），尝试同步数据
+    // 只要配置了 Supabase 就算在线（不需要 auth session），尝试同步数据（均加超时）
     const online = await isReallyOnline()
     if (online) {
-      // 尝试连接共享账号（仅后台认证，失败不影响在线模式）
-      try { await connectToCloud() } catch {}
+      await withTimeout((async () => { try { await connectToCloud() } catch {} })(), 5000, null, 'connectToCloud(doInit)')
       cloudStatus.value = 'success'
-      const syncResult = await syncLocalToCloud()
-      console.log('初始化数据同步:', syncResult.message)
+      const syncResult = await withTimeout(syncLocalToCloud(), 15000, { success: false, message: '同步超时跳过' }, 'syncLocalToCloud(doInit)') as any
+      console.log('初始化数据同步:', syncResult?.message)
     }
 
     router.push('/stock')
@@ -238,8 +250,8 @@ const doLogin = async () => {
     // 在线模式判断：只要配置了 Supabase 就算在线（不需要 auth session）
     const online = await isReallyOnline()
     if (online) {
-      // 尝试连接共享账号（仅后台认证，失败不影响在线模式和数据读写）
-      try { await connectToCloud() } catch {}
+      // 尝试连接共享账号（仅后台认证，超时/失败均不阻塞登录，5秒强制跳过）
+      await withTimeout((async () => { try { await connectToCloud() } catch {} })(), 5000, null, 'connectToCloud(doLogin)')
       cloudStatus.value = 'success'
     }
 
@@ -247,10 +259,10 @@ const doLogin = async () => {
     let userList = getUserList()
     let userData = userList.find((u: any) => u.nickName === userName.value.trim())
 
-    // 本地没找到，尝试从云端查找（只要在线就尝试）
+    // 本地没找到，尝试从云端查找（只要在线就尝试，8秒超时跳过）
     if (!userData && online) {
       try {
-        const cloudUsers = await fetchUsers()
+        const cloudUsers = (await withTimeout(fetchUsers(), 8000, [], 'fetchUsers(doLogin)')) as any[]
         userData = cloudUsers.find((u: any) => u.nickName === userName.value.trim())
         if (userData) {
           // 缓存到本地，下次登录更快
@@ -291,10 +303,10 @@ const doLogin = async () => {
       campusName: userCampusName
     })
 
-    // 在线模式下同步本地数据到云端（仅在云端为空时）
+    // 在线模式下同步本地数据到云端（仅在云端为空时，15秒超时跳过）
     if (online) {
-      const syncResult = await syncLocalToCloud()
-      console.log('数据同步:', syncResult.message)
+      const syncResult = (await withTimeout(syncLocalToCloud(), 15000, { success: false, message: '数据同步超时跳过' }, 'syncLocalToCloud(doLogin)')) as any
+      console.log('数据同步:', syncResult?.message)
     }
 
     saveRemember()
