@@ -706,21 +706,30 @@ const parseCSV = async (text: string) => {
     const validSubjects = subjectList.value.map((s: any) => s.name)
     const validDifficulties = difficultyList.value.map((d: any) => d.name)
 
+    // —— 提前提示：解析完行数立刻告知（不用等预加载 Supabase 10 秒超时后才姗姗来迟）
+    const dataRows = lines.length - 1
+    if (dataRows > 30) {
+      alert(`📦 检测到 ${dataRows} 本书待导入，大约需要 ${Math.ceil(dataRows / 20)} 秒，请耐心等待，完成后会自动弹窗提示！`)
+    } else if (dataRows > 0) {
+      // 即使 <=30 也弹个小提示？别弹太多 alert 了，默默跑即可，保证至少流程在动
+      console.info(`[导入] 检测到 ${dataRows} 本书，开始处理...`)
+    } else {
+      alert('⚠️  CSV 里除了表头没有任何数据行，请检查 CSV 是否正确。')
+      return
+    }
+
     // === 预加载一次所需数据，避免导入时 O(N) 次网络请求导致长时间"无反应" ===
-    const bookListData = await ds.fetchBooks()
+    //     Supabase 从 GitHub Pages 访问经常 10 秒才超时，所以这里给 5 秒上限，超过就空数组由后面逐行兜底（逐行也有 withTimeout）
+    const bookListData = await withTimeout(ds.fetchBooks(), 5000, [] as any[], 'fetchBooks(导入预加载)') as any[]
     let stockListData: StockItem[] = []
     try {
-      stockListData = await withTimeout(ds.fetchStock(), 10000, [], 'fetchStock(导入预加载)') as StockItem[]
+      stockListData = await withTimeout(ds.fetchStock(), 5000, [], 'fetchStock(导入预加载)') as StockItem[]
       stockListData = stockListData || []
     } catch (e) {
       console.warn('[导入] 预加载库存失败，将逐行查询：', e)
       stockListData = []
     }
     const now = Date.now()
-    const dataRows = lines.length - 1
-    if (dataRows > 30) {
-      alert(`📦 检测到 ${dataRows} 本书待导入，大约需要 ${Math.ceil(dataRows / 20)} 秒，请耐心等待，完成后会自动弹窗提示！`)
-    }
 
     // 第一遍扫描：解析所有行，校验并检测冲突
     interface ParsedRow {
@@ -814,14 +823,21 @@ const parseCSV = async (text: string) => {
       const conflictNames = conflictRows.slice(0, 5).map(r => r.bookName).join('\n')
       const moreText = conflictRows.length > 5 ? `\n... 等共 ${conflictRows.length} 本` : ''
 
-      const choice = prompt(
+      // 关键：浏览器在连续弹窗（alert 后又 prompt）后，很容易静默拦截原生对话框
+      //     prompt 被拦截时直接返回 null，原来代码会走 "已取消导入" return，
+      //     但如果 alert("已取消") 也被同时拦截，用户就以为"点确定后没反应、也不添加书本"。
+      // —— 修复：如果 prompt 返回 null，不直接取消；先靠时间差判断"用户真点了取消"还是"被拦截立刻返回 null"。
+      //     被拦截时默认走【合并累加】并额外 alert 告知（alert 就算被拦，结果弹窗里也会有文字说明）。
+      const t0 = Date.now()
+      const choice = window.prompt(
         `检测到 ${conflictRows.length} 本已存在的书本：\n${conflictNames}${moreText}\n\n` +
         `请选择处理方式（输入对应数字）：\n` +
-        `1 - 合并求和：在原有库存基础上累加\n` +
+        `1 - 合并求和：在原有库存基础上累加（推荐）\n` +
         `2 - 覆盖数据：用导入数据替换原有库存\n` +
         `3 - 跳过不导：已存在的书本不导入\n\n` +
         `请输入 1、2 或 3：`
       )
+      const dt = Date.now() - t0
 
       if (choice === '1') {
         conflictMode = 'merge'
@@ -829,12 +845,20 @@ const parseCSV = async (text: string) => {
         conflictMode = 'overwrite'
       } else if (choice === '3') {
         conflictMode = 'skip'
+      } else if (choice === null && dt < 150) {
+        // —— 可疑：用户点击"确定"（前面的 alert 确定）+ prompt 展示 + 用户输入数字，至少几百毫秒
+        //     150ms 内返回 null = 浏览器直接拦截了 prompt，根本没给用户看选项
+        console.warn('[导入] prompt 被浏览器拦截（返回 null，耗时仅', dt, 'ms），已自动降级为【合并累加(merge)】继续导入')
+        conflictMode = 'merge'
+        const fallbackMsg = `⚠️  浏览器拦截了冲突选择对话框，已自动按【合并求和(累加)】处理 ${conflictRows.length} 本重复书本。\n\n如需"覆盖"或"跳过"模式，请稍后分批导入少量书本，或在浏览器地址栏右侧允许该站点弹窗后重试。`
+        importResult.value.errors.push(fallbackMsg)
+        try { alert(fallbackMsg) } catch {} // alert 就算又被拦也没事，上面已经把说明写进错误明细了
       } else if (choice === null) {
-        // 用户取消
+        // 用户显式取消（点了取消按钮/ESC，耗时超过 150ms）
         alert('已取消导入')
         return
       } else {
-        alert('输入无效，已取消导入')
+        alert('输入无效，已取消导入（请直接输入数字 1、2 或 3，不要加空格或其他字符）')
         return
       }
     }
@@ -852,7 +876,14 @@ const parseCSV = async (text: string) => {
 
         if (conflictMode === 'overwrite') {
           // 覆盖：先删除原有库存，再创建新记录
-          await ds.deleteBook(row.year, row.term, row.grade, row.subject, row.difficulty)
+          try {
+            await withTimeout(
+              ds.deleteBook(row.year, row.term, row.grade, row.subject, row.difficulty),
+              6000, null, `deleteBook(第${row.lineNum}行 ${row.bookName})`
+            )
+          } catch (e) {
+            console.warn('[导入] 删除旧书失败(继续覆盖)：', row.bookName, e)
+          }
           // 重新创建书本
           const newBook: any = {
             _id: generateId(),
@@ -868,35 +899,58 @@ const parseCSV = async (text: string) => {
             longhuaQuantity: row.longhuaQty,
             createTime: now
           }
-          await ds.addBook(newBook)
-          bookListData.push(newBook)
-          // 重新创建库存记录（使用共享 helper，传入预加载的 stock 列表）
-          await updateOrCreateStockPreloaded(stockListData, 'honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now, 'overwrite')
-          await updateOrCreateStockPreloaded(stockListData, 'longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now, 'overwrite')
-          // 覆盖模式写入入库日志
-          const userInfo = getUserInfo()
-          if (row.hongheQty > 0) {
-            await ds.addLog({
-              type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
-              action: '入库', detail: '批量导入(覆盖)',
-              year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
-              campus: 'honghe', bookName: row.bookName, quantity: row.hongheQty, note: '批量导入(覆盖)', createTime: now
-            })
+          let savedOk = true
+          try {
+            await withTimeout(ds.addBook(newBook), 6000, null, `addBook(第${row.lineNum}行 ${row.bookName})`)
+            bookListData.push(newBook)
+          } catch (e) {
+            savedOk = false
+            importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】创建书本失败：${(e as Error).message || e}`)
           }
-          if (row.longhuaQty > 0) {
-            await ds.addLog({
-              type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
-              action: '入库', detail: '批量导入(覆盖)',
-              year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
-              campus: 'longhua', bookName: row.bookName, quantity: row.longhuaQty, note: '批量导入(覆盖)', createTime: now
-            })
+          if (savedOk) {
+            let stockFailed = false
+            try {
+              await updateOrCreateStockPreloaded(stockListData, 'honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now, 'overwrite')
+            } catch (e) { stockFailed = true; importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】洪河校区库存覆盖失败：${(e as Error).message || e}`) }
+            try {
+              await updateOrCreateStockPreloaded(stockListData, 'longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now, 'overwrite')
+            } catch (e) { stockFailed = true; importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】龙华校区库存覆盖失败：${(e as Error).message || e}`) }
+            // 覆盖模式写入入库日志（单校区失败不影响另一校区）
+            const userInfo = getUserInfo()
+            if (row.hongheQty > 0) {
+              try {
+                await withTimeout(ds.addLog({
+                  type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
+                  action: '入库', detail: '批量导入(覆盖)',
+                  year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
+                  campus: 'honghe', bookName: row.bookName, quantity: row.hongheQty, note: '批量导入(覆盖)', createTime: now
+                }), 6000, null, `addLog(洪河-覆盖-${row.bookName})`)
+              } catch {}
+            }
+            if (row.longhuaQty > 0) {
+              try {
+                await withTimeout(ds.addLog({
+                  type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
+                  action: '入库', detail: '批量导入(覆盖)',
+                  year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
+                  campus: 'longhua', bookName: row.bookName, quantity: row.longhuaQty, note: '批量导入(覆盖)', createTime: now
+                }), 6000, null, `addLog(龙华-覆盖-${row.bookName})`)
+              } catch {}
+            }
+            if (!stockFailed) importResult.value.success++
           }
         } else {
           // 合并：在原有库存基础上累加
-          await updateOrCreateStockPreloaded(stockListData, 'honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now, 'merge')
-          await updateOrCreateStockPreloaded(stockListData, 'longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now, 'merge')
+          let mergeFailed = false
+          try {
+            await updateOrCreateStockPreloaded(stockListData, 'honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now, 'merge')
+          } catch (e) { mergeFailed = true; importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】洪河校区库存累加失败：${(e as Error).message || e}`) }
+          try {
+            await updateOrCreateStockPreloaded(stockListData, 'longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now, 'merge')
+          } catch (e) { mergeFailed = true; importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】龙华校区库存累加失败：${(e as Error).message || e}`) }
+          if (!mergeFailed) importResult.value.success++
+          else importResult.value.skipped++
         }
-        importResult.value.skipped++
       } else {
         // 创建新书本
         const newBook: any = {
@@ -913,13 +967,24 @@ const parseCSV = async (text: string) => {
           longhuaQuantity: row.longhuaQty,
           createTime: now
         }
-        await ds.addBook(newBook)
-        bookListData.push(newBook)
-        importResult.value.success++
-
-        // 创建库存记录（即使数量为0也创建，确保书本接入库存统计）
-        await updateOrCreateStockPreloaded(stockListData, 'honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now, 'merge')
-        await updateOrCreateStockPreloaded(stockListData, 'longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now, 'merge')
+        let savedOk = true
+        try {
+          await withTimeout(ds.addBook(newBook), 6000, null, `addBook(第${row.lineNum}行 ${row.bookName})`)
+          bookListData.push(newBook)
+        } catch (e) {
+          savedOk = false
+          importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】创建书本失败：${(e as Error).message || e}`)
+        }
+        if (savedOk) {
+          importResult.value.success++
+          // 创建库存记录（即使数量为0也创建，确保书本接入库存统计）
+          try {
+            await updateOrCreateStockPreloaded(stockListData, 'honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now, 'merge')
+          } catch (e) { importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】洪河校区库存失败：${(e as Error).message || e}`) }
+          try {
+            await updateOrCreateStockPreloaded(stockListData, 'longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now, 'merge')
+          } catch (e) { importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】龙华校区库存失败：${(e as Error).message || e}`) }
+        }
       }
     }
 
@@ -981,7 +1046,17 @@ const updateOrCreateStockPreloaded = async (
         remainingStock: Math.max(0, quantity - (existing.totalOut || 0)),
         updateTime: now
       } as StockItem
-      await ds.upsertStock(saved)
+      try {
+        const r = await withTimeout<any>(
+          ds.upsertStock(saved),
+          6000, { success: false, error: 'upsertStock(覆盖) 超时（超过6秒未响应，已跳过以保证不卡死）' },
+          `upsertStock(覆盖 ${campusName}-${bookName})`
+        )
+        if (r && r.success === false) throw new Error(r.error || '写入库存失败')
+      } catch (e) {
+        console.warn('[导入] upsertStock(覆盖)失败，但已在本地内存更新：', campus, bookName, e)
+        throw e
+      }
     } else {
       const newTotalIn = (existing.totalIn || 0) + quantity
       saved = {
@@ -993,7 +1068,17 @@ const updateOrCreateStockPreloaded = async (
         remainingStock: newTotalIn - (existing.totalOut || 0),
         updateTime: now
       } as StockItem
-      await ds.upsertStock(saved)
+      try {
+        const r = await withTimeout<any>(
+          ds.upsertStock(saved),
+          6000, { success: false, error: 'upsertStock(累加) 超时（超过6秒未响应，已跳过以保证不卡死）' },
+          `upsertStock(累加 ${campusName}-${bookName})`
+        )
+        if (r && r.success === false) throw new Error(r.error || '写入库存失败')
+      } catch (e) {
+        console.warn('[导入] upsertStock(累加)失败，但已在本地内存更新：', campus, bookName, e)
+        throw e
+      }
     }
     // 更新内存里的同一条，保证后续相同书本仍在同一批次导入时，查找命中的是最新值
     const idx = stockList.findIndex(s => s._id === existing!._id)
@@ -1019,7 +1104,17 @@ const updateOrCreateStockPreloaded = async (
       createTime: now,
       updateTime: now
     } as StockItem
-    await ds.upsertStock(payload)
+    try {
+      const r = await withTimeout<any>(
+        ds.upsertStock(payload),
+        6000, { success: false, error: 'upsertStock(新增) 超时（超过6秒未响应，已跳过以保证不卡死）' },
+        `upsertStock(新增 ${campusName}-${bookName})`
+      )
+      if (r && r.success === false) throw new Error(r.error || '写入库存失败')
+    } catch (e) {
+      console.warn('[导入] upsertStock(新增)失败，但已在本地内存更新：', campus, bookName, e)
+      throw e
+    }
     saved = payload
     stockList.push(saved)
   }
@@ -1027,19 +1122,24 @@ const updateOrCreateStockPreloaded = async (
   // 写入入库日志（批量导入只有 merge 模式会记一次单独的 addLog，overwrite 模式由外层统一记录，避免重复）
   if (quantity > 0 && mode === 'merge') {
     const userInfo = getUserInfo()
-    await ds.addLog({
-      stockId: existing?._id || saved?._id || '',
-      type: 'stock_in',
-      operator: userInfo?.userName || userInfo?.nickName || '管理员',
-      operatorName: userInfo?.userName || userInfo?.nickName || '管理员',
-      action: '入库',
-      detail: '批量导入',
-      year, term, grade, subject, difficulty, campus,
-      bookName,
-      quantity,
-      note: '批量导入',
-      createTime: now
-    })
+    try {
+      await withTimeout(ds.addLog({
+        stockId: existing?._id || saved?._id || '',
+        type: 'stock_in',
+        operator: userInfo?.userName || userInfo?.nickName || '管理员',
+        operatorName: userInfo?.userName || userInfo?.nickName || '管理员',
+        action: '入库',
+        detail: '批量导入',
+        year, term, grade, subject, difficulty, campus,
+        bookName,
+        quantity,
+        note: '批量导入',
+        createTime: now
+      }), 6000, null, `addLog(${campusName}-${bookName})`)
+    } catch (e) {
+      // 日志失败不影响主流程，只 warn
+      console.warn('[导入] 写入入库日志失败，不影响库存结果：', campus, bookName, e)
+    }
   }
 }
 
