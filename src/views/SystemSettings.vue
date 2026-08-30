@@ -24,6 +24,10 @@ onMounted(() => {
   loadSettings()
 })
 
+const goBack = () => {
+  router.back()
+}
+
 const loadSettings = async () => {
   loading.value = true
   try {
@@ -110,6 +114,7 @@ const clearAllData = async () => {
 <template>
   <div class="system-settings-page">
     <div class="page-header">
+      <span class="back-btn" @click="goBack">‹</span>
       <h1 class="page-title">⚙️ 系统设置</h1>
     </div>
     
@@ -191,6 +196,20 @@ const clearAllData = async () => {
   background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
   padding: 20px;
   text-align: center;
+  position: relative;
+}
+
+.back-btn {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #fff;
+  font-size: 32px;
+  cursor: pointer;
+  padding: 0 8px;
+  line-height: 1;
+  z-index: 1;
 }
 
 .page-title {

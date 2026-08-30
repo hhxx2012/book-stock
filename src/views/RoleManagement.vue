@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { setRolePermissions, getRoleList, setRoleList } from '../utils/storage'
 import * as ds from '../services/dataService'
 
+const router = useRouter()
 const roleList = ref([
   { role: 'super', label: '超级管理员' },
   { role: 'admin', label: '管理员' },
@@ -48,6 +50,10 @@ const expandedRole = ref<string | null>('super')
 onMounted(() => {
   loadPermissions()
 })
+
+const goBack = () => {
+  router.back()
+}
 
 const loadPermissions = async () => {
   const perms = await ds.fetchRolePermissions()
@@ -119,6 +125,7 @@ const deselectAll = async (role: string) => {
 <template>
   <div class="role-management-page">
     <div class="page-header">
+      <span class="back-btn" @click="goBack">‹</span>
       <h1 class="page-title">角色管理</h1>
     </div>
     
@@ -171,6 +178,20 @@ const deselectAll = async (role: string) => {
   background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
   padding: 20px;
   text-align: center;
+  position: relative;
+}
+
+.back-btn {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #fff;
+  font-size: 32px;
+  cursor: pointer;
+  padding: 0 8px;
+  line-height: 1;
+  z-index: 1;
 }
 
 .page-title {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
+import QRCode from 'qrcode'
 import { setUserInfo, setRole, setCampus, setCampusName, getUserList, setUserList, setRoleList, setRolePermissions, getRolePermissions, getRoleList } from '../utils/storage'
 import { connectToCloud, isSupabaseConfigured } from '../utils/supabase'
 import { syncLocalToCloud, fetchUsers, isReallyOnline } from '../services/dataService'
@@ -17,6 +18,9 @@ const initConfirmPassword = ref('')
 const showUserList = ref(false) // 显示已有用户名列表
 const existingUserNames = ref<string[]>([])
 const rememberPwd = ref(false) // 记住密码
+const showQrcode = ref(true) // 显示网页地址二维码
+const qrcodeCanvas = ref<HTMLCanvasElement | null>(null)
+const siteUrl = ref('')
 
 // 记住密码的 localStorage key
 const REMEMBER_KEY = 'login_remember'
@@ -177,6 +181,25 @@ onMounted(async () => {
   } else {
     cloudStatus.value = 'disabled'
   }
+
+  // 生成网页地址二维码（优先用公网地址，方便手机扫码访问）
+  const currentUrl = window.location.href.split('#')[0]
+  if (currentUrl.includes('localhost') || currentUrl.includes('127.0.0.1') || currentUrl.match(/\b192\.168\./)) {
+    // 本地开发环境：用 GitHub Pages 公网地址生成二维码
+    siteUrl.value = 'https://hhxx2012.github.io/book-stock/'
+  } else {
+    siteUrl.value = currentUrl
+  }
+  await nextTick()
+  if (qrcodeCanvas.value) {
+    QRCode.toCanvas(qrcodeCanvas.value, siteUrl.value, {
+      width: 200,
+      margin: 2,
+      color: { dark: '#096dd9', light: '#ffffff' }
+    }, (err: any) => {
+      if (err) console.error('[QR] 生成二维码失败:', err)
+    })
+  }
 })
 
 const doInit = async () => {
@@ -331,6 +354,22 @@ const selectExistingUser = (name: string) => {
   userName.value = name
   showUserList.value = false
 }
+
+const toggleQrcode = async () => {
+  showQrcode.value = !showQrcode.value
+  if (showQrcode.value) {
+    await nextTick()
+    if (qrcodeCanvas.value) {
+      QRCode.toCanvas(qrcodeCanvas.value, siteUrl.value, {
+        width: 200,
+        margin: 2,
+        color: { dark: '#096dd9', light: '#ffffff' }
+      }, (err: any) => {
+        if (err) console.error('[QR] 生成二维码失败:', err)
+      })
+    }
+  }
+}
 </script>
 
 <template>
@@ -442,8 +481,8 @@ const selectExistingUser = (name: string) => {
           </div>
           <div class="user-list-body">
             <div v-if="existingUserNames.length === 0" class="no-users">暂无账号</div>
-            <div 
-              v-for="name in existingUserNames" 
+            <div
+              v-for="name in existingUserNames"
               :key="name"
               class="user-list-item"
               @click="selectExistingUser(name)"
@@ -451,6 +490,18 @@ const selectExistingUser = (name: string) => {
               {{ name }}
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- 网页地址二维码 -->
+      <div class="qrcode-section">
+        <div class="qrcode-toggle" @click="toggleQrcode">
+          <span>{{ showQrcode ? '收起二维码' : '📱 扫码进入' }}</span>
+        </div>
+        <div v-show="showQrcode" class="qrcode-box">
+          <canvas ref="qrcodeCanvas"></canvas>
+          <p class="qrcode-url">{{ siteUrl }}</p>
+          <p class="qrcode-tip">手机扫码直接打开本页面</p>
         </div>
       </div>
     </div>
@@ -749,5 +800,55 @@ const selectExistingUser = (name: string) => {
 .login-footer p {
   font-size: 12px;
   color: rgba(255, 255, 255, 0.6);
+}
+
+.qrcode-section {
+  margin-top: 24px;
+  text-align: center;
+}
+
+.qrcode-toggle {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 8px 20px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 20px;
+  display: inline-block;
+  transition: background 0.2s;
+}
+
+.qrcode-toggle:active {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.qrcode-box {
+  margin-top: 16px;
+  background: #fff;
+  border-radius: 16px;
+  padding: 20px;
+  display: inline-block;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+
+.qrcode-box canvas {
+  display: block;
+  margin: 0 auto;
+  border-radius: 8px;
+}
+
+.qrcode-url {
+  font-size: 11px;
+  color: #999;
+  margin-top: 12px;
+  word-break: break-all;
+  max-width: 220px;
+}
+
+.qrcode-tip {
+  font-size: 13px;
+  color: #1890ff;
+  margin-top: 4px;
+  font-weight: 500;
 }
 </style>

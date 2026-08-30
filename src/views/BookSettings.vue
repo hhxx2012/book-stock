@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import QRCode from 'qrcode'
 import { getDefaultYear, getDefaultTerm, getUserInfo } from '../utils/storage'
 import { isCloudConnected, connectToCloud, isSupabaseConfigured } from '../utils/supabase'
@@ -12,6 +13,7 @@ import {
 import { getBookList as localOnlyGetBookList } from '../utils/storage'
 import type { BookItem, StockItem } from '../types'
 
+const router = useRouter()
 const bookList = ref<BookItem[]>([])
 const gradeList = ref<any[]>([])
 const subjectList = ref<any[]>([])
@@ -102,6 +104,10 @@ const filteredBooks = computed(() => {
   if (selectedTerm.value) list = list.filter((b: any) => b.term === selectedTerm.value)
   return list
 })
+
+const goBack = () => {
+  router.back()
+}
 
 const selectFilter = (field: string) => {
   showOptions.value = showOptions.value === field ? '' : field
@@ -1148,6 +1154,7 @@ const closeImportModal = () => {
 <template>
   <div class="book-settings-page">
     <div class="page-header">
+      <span class="back-btn" @click="goBack">‹</span>
       <h1 class="page-title">📚 书本设置</h1>
     </div>
     
@@ -1396,6 +1403,20 @@ const closeImportModal = () => {
   background: linear-gradient(135deg, #722ed1 0%, #531dab 100%);
   padding: 20px;
   text-align: center;
+  position: relative;
+}
+
+.back-btn {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #fff;
+  font-size: 32px;
+  cursor: pointer;
+  padding: 0 8px;
+  line-height: 1;
+  z-index: 1;
 }
 
 .toolbar {

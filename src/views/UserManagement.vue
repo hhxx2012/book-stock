@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { getRolePermissions, getRoleList } from '../utils/storage'
 import * as ds from '../services/dataService'
 import type { UserInfo, Role } from '../types'
 
+const router = useRouter()
 const userList = ref<UserInfo[]>([])
 const showAddModal = ref(false)
 const showEditModal = ref(false)
@@ -102,6 +104,10 @@ const getGroupedPermissions = (permIds: string[]) => {
 onMounted(() => {
   loadUsers()
 })
+
+const goBack = () => {
+  router.back()
+}
 
 const loadUsers = async () => {
   try {
@@ -320,6 +326,7 @@ const editMergedPermissions = computed(() => {
 <template>
   <div class="user-management-page">
     <div class="page-header">
+      <span class="back-btn" @click="goBack">‹</span>
       <h1 class="page-title">用户管理</h1>
     </div>
     
@@ -525,6 +532,20 @@ const editMergedPermissions = computed(() => {
   background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
   padding: 20px;
   text-align: center;
+  position: relative;
+}
+
+.back-btn {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #fff;
+  font-size: 32px;
+  cursor: pointer;
+  padding: 0 8px;
+  line-height: 1;
+  z-index: 1;
 }
 
 .page-title {

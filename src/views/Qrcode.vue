@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { getUserInfo } from '../utils/storage'
 import * as ds from '../services/dataService'
 import type { BookItem } from '../types'
 
+const router = useRouter()
 const scanInput = ref('')
 const scanning = ref(false)
 const scannedBook = ref<BookItem | null>(null)
@@ -36,6 +38,10 @@ const userCampuses = computed(() => {
 onMounted(async () => {
   bookList.value = await ds.fetchBooks() as BookItem[]
 })
+
+const goBack = () => {
+  router.back()
+}
 
 const scanQrcode = () => {
   if (!scanInput.value.trim()) {
@@ -147,6 +153,7 @@ const confirmOperate = async () => {
 <template>
   <div class="qrcode-page">
     <div class="page-header">
+      <span class="back-btn" @click="goBack">‹</span>
       <h1 class="page-title">📱 扫码出入库</h1>
     </div>
     
@@ -251,6 +258,20 @@ const confirmOperate = async () => {
   background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
   padding: 20px;
   text-align: center;
+  position: relative;
+}
+
+.back-btn {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #fff;
+  font-size: 32px;
+  cursor: pointer;
+  padding: 0 8px;
+  line-height: 1;
+  z-index: 1;
 }
 
 .page-title {

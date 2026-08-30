@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { getUserInfo } from '../utils/storage'
 import * as ds from '../services/dataService'
 import type { LogItem, BookItem } from '../types'
 
+const router = useRouter()
 const logList = ref<LogItem[]>([])
 const bookList = ref<BookItem[]>([])
 const filterType = ref('')
@@ -23,6 +25,10 @@ const typeOptions = [
 onMounted(() => {
   loadLogs()
 })
+
+const goBack = () => {
+  router.back()
+}
 
 const loadLogs = async () => {
   loading.value = true
@@ -82,6 +88,7 @@ const formatLogTime = (log: LogItem) => {
 <template>
   <div class="log-page">
     <div class="page-header">
+      <span class="back-btn" @click="goBack">‹</span>
       <h1 class="page-title">📋 操作日志</h1>
     </div>
     
@@ -141,6 +148,20 @@ const formatLogTime = (log: LogItem) => {
   background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
   padding: 20px;
   text-align: center;
+  position: relative;
+}
+
+.back-btn {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #fff;
+  font-size: 32px;
+  cursor: pointer;
+  padding: 0 8px;
+  line-height: 1;
+  z-index: 1;
 }
 
 .page-title {

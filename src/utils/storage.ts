@@ -366,10 +366,12 @@ export const setBookList = (list: BookItem[]) => {
   localStorage.setItem(BOOK_LIST_KEY, JSON.stringify(list))
 }
 
-export const getBookList = () => {
+export const getBookList = (): BookItem[] => {
   try {
     const data = localStorage.getItem(BOOK_LIST_KEY)
-    return data ? JSON.parse(data) : []
+    if (!data) return []
+    const parsed = JSON.parse(data)
+    return Array.isArray(parsed) ? parsed : []
   } catch {
     return []
   }

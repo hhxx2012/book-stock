@@ -105,13 +105,55 @@ const checkDuplicateOperation = (data: { campus: string; year: string; term: str
 
 // ==================== 在线模式检测 ====================
 // RLS 已禁用，数据访问不再依赖 Supabase auth session
-// 只要配置了 Supabase，就算"在线"
-const ONLINE = isSupabaseConfigured()
+// 真正的在线状态需要实际验证连通性，不能只看配置是否存在
+let onlineStatus: 'unknown' | 'online' | 'offline' = 'unknown'
+let lastCheckTime = 0
+const CHECK_CACHE_MS = 30000 // 30秒内不重复检测
 
 // 动态判断是否真正在线
-// RLS 禁用后，不再需要 auth session，只要 Supabase 已配置即为在线
+// 需要实际验证 Supabase 是否可达，避免域名失效时所有操作都失败
 export const isReallyOnline = async (): Promise<boolean> => {
-  return ONLINE
+  if (!isSupabaseConfigured()) return false
+
+  const now = Date.now()
+  // 如果最近检测过且结果为 offline，在缓存期内直接返回 false
+  // 避免每次调用都等待超时
+  if (onlineStatus === 'offline' && (now - lastCheckTime) < CHECK_CACHE_MS) {
+    return false
+  }
+  if (onlineStatus === 'online' && (now - lastCheckTime) < CHECK_CACHE_MS) {
+    return true
+  }
+
+  // 用 Promise.race 做超时检测（5秒）
+  try {
+    const result = await Promise.race([
+      supabase.from('books').select('id').limit(1),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), 5000)
+      )
+    ])
+    if ((result as any).error) {
+      // 有错误但不是网络错误（如表不存在），也视为在线（API可达）
+      onlineStatus = 'online'
+      lastCheckTime = now
+      return true
+    }
+    onlineStatus = 'online'
+    lastCheckTime = now
+    return true
+  } catch {
+    onlineStatus = 'offline'
+    lastCheckTime = now
+    console.warn('[isReallyOnline] 云端不可达，切换到离线模式')
+    return false
+  }
+}
+
+// 手动设置离线状态（当某个 API 失败时调用，加速后续降级）
+export const markOffline = () => {
+  onlineStatus = 'offline'
+  lastCheckTime = Date.now()
 }
 
 // ==================== 本地数据同步到云端 ====================
@@ -433,25 +475,37 @@ export const fetchDifficulties = async () => {
 export const fetchBooks = async () => {
   const online = await isReallyOnline()
   if (online) {
-    const { data, error } = await supabase.from('books').select('*').order('created_at', { ascending: false })
-    if (error) {
-      console.error('[fetchBooks] 读取云端失败:', error.message, error)
+    try {
+      const { data, error } = await supabase.from('books').select('*').order('created_at', { ascending: false })
+      if (error) {
+        console.error('[fetchBooks] 读取云端失败:', error.message, error)
+        markOffline()
+        // 云端失败，回退到本地数据
+        return getBookList()
+      }
+      const result = data?.map(b => migrateGradeInRecord({
+        _id: b.id,
+        bookName: b.book_name,
+        bookCode: b.book_code || '',
+        year: b.year,
+        term: b.term,
+        grade: b.grade,
+        subject: b.subject,
+        difficulty: b.difficulty || '',
+        totalQuantity: b.total_quantity || 0,
+        hongheQuantity: b.honghe_quantity || 0,
+        longhuaQuantity: b.longhua_quantity || 0,
+        createTime: new Date(b.created_at).getTime()
+      })) || []
+      // 同步到本地
+      setBookList(result)
+      return result
+    } catch (e) {
+      console.error('[fetchBooks] 云端请求异常:', e)
+      markOffline()
+      // 云端异常，回退到本地数据
+      return getBookList()
     }
-    const result = data?.map(b => migrateGradeInRecord({
-      _id: b.id,
-      bookName: b.book_name,
-      bookCode: b.book_code || '',
-      year: b.year,
-      term: b.term,
-      grade: b.grade,
-      subject: b.subject,
-      difficulty: b.difficulty || '',
-      totalQuantity: b.total_quantity || 0,
-      hongheQuantity: b.honghe_quantity || 0,
-      longhuaQuantity: b.longhua_quantity || 0,
-      createTime: new Date(b.created_at).getTime()
-    })) || []
-    return result
   }
   return getBookList()
 }
@@ -462,9 +516,8 @@ export const addBook = async (book: any) => {
   list.push(book)
   setBookList(list)
   // 如果真正在线，同时写入 Supabase
-  const online = await isReallyOnline()
-  if (online) {
-    const { data, error } = await supabase.from('books').insert({
+  if (await isReallyOnline()) {
+    const { error } = await supabase.from('books').insert({
       book_name: book.bookName,
       book_code: book.bookCode,
       year: book.year,
@@ -475,13 +528,13 @@ export const addBook = async (book: any) => {
       total_quantity: book.totalQuantity || 0,
       honghe_quantity: book.hongheQuantity || 0,
       longhua_quantity: book.longhuaQuantity || 0
-    }).select().single()
+    })
     if (error) {
-      console.error('[addBook] 写入云端失败:', error.message, error)
+      console.error('[addBook] 云端同步失败:', error.message)
+      markOffline()
     }
-    return { success: !error, data, error: error?.message }
+    return { success: !error, error: error?.message }
   }
-  console.warn('[addBook] 未连接云端，仅写入本地')
   return { success: true }
 }
 
@@ -556,14 +609,12 @@ export const deleteBook = async (year: string, term: string, grade: string, subj
 
   // 如果真正在线，同时删除 Supabase
   if (await isReallyOnline()) {
-    // 删除书本
-    await deleteMatch('books')
-    // 删除库存
-    await deleteMatch('stock')
-    // 删除日志
-    await deleteMatch('logs')
-    // 删除预计和领取（都在 forecasts 表中）
-    await deleteMatch('forecasts')
+    await Promise.all([
+      deleteMatch('books'),
+      deleteMatch('stock'),
+      deleteMatch('logs'),
+      deleteMatch('forecasts')
+    ])
   }
 
   return { success: true }
@@ -573,31 +624,43 @@ export const deleteBook = async (year: string, term: string, grade: string, subj
 export const fetchStock = async () => {
   const online = await isReallyOnline()
   if (online) {
-    const { data, error } = await supabase.from('stock').select('*').order('created_at', { ascending: false })
-    if (error) {
-      console.error('[fetchStock] 读取云端失败:', error.message, error)
+    try {
+      const { data, error } = await supabase.from('stock').select('*').order('created_at', { ascending: false })
+      if (error) {
+        console.error('[fetchStock] 读取云端失败:', error.message, error)
+        markOffline()
+        // 云端失败，回退到本地数据
+        return localGetStockData()
+      }
+      const result = data?.map(s => migrateGradeInRecord({
+        _id: s.id,
+        campus: s.campus,
+        campusName: s.campus_name,
+        year: s.year,
+        term: s.term,
+        grade: s.grade,
+        subject: s.subject,
+        difficulty: s.difficulty || '',
+        bookName: s.book_name,
+        bookCode: s.book_code || '',
+        totalQuantity: s.total_quantity || 0,
+        hongheQuantity: s.honghe_quantity || 0,
+        longhuaQuantity: s.longhua_quantity || 0,
+        totalIn: s.total_in || 0,
+        totalOut: s.total_out || 0,
+        remainingStock: s.remaining_stock || 0,
+        createTime: new Date(s.created_at).getTime(),
+        updateTime: new Date(s.updated_at).getTime()
+      })) || []
+      // 同步到本地
+      localSetStockData(result)
+      return result
+    } catch (e) {
+      console.error('[fetchStock] 云端请求异常:', e)
+      markOffline()
+      // 云端异常，回退到本地数据
+      return localGetStockData()
     }
-    const result = data?.map(s => migrateGradeInRecord({
-      _id: s.id,
-      campus: s.campus,
-      campusName: s.campus_name,
-      year: s.year,
-      term: s.term,
-      grade: s.grade,
-      subject: s.subject,
-      difficulty: s.difficulty || '',
-      bookName: s.book_name,
-      bookCode: s.book_code || '',
-      totalQuantity: s.total_quantity || 0,
-      hongheQuantity: s.honghe_quantity || 0,
-      longhuaQuantity: s.longhua_quantity || 0,
-      totalIn: s.total_in || 0,
-      totalOut: s.total_out || 0,
-      remainingStock: s.remaining_stock || 0,
-      createTime: new Date(s.created_at).getTime(),
-      updateTime: new Date(s.updated_at).getTime()
-    })) || []
-    return result
   }
   return localGetStockData()
 }
@@ -615,35 +678,12 @@ export const upsertStock = async (stock: Partial<StockItem>) => {
     list.push(stock as StockItem)
   }
   localSetStockData(list)
-  // 如果真正在线，同时写入 Supabase（使用先查后写，不依赖 onConflict 约束）
-  const online = await isReallyOnline()
-  if (online) {
+  // 如果真正在线，同时写入 Supabase
+  if (await isReallyOnline()) {
     const diffVal = stock.difficulty || null
-    // 先查询是否已有记录（同时处理 difficulty 为 NULL 和空字符串的情况）
     const baseFilter = (q: any) => q.eq('campus', stock.campus || '')
       .eq('year', stock.year || '').eq('term', stock.term || '')
       .eq('grade', stock.grade || '').eq('subject', stock.subject || '')
-
-    let existing: any = null
-    if (diffVal) {
-      const { data, error: queryError } = await baseFilter(
-        supabase.from('stock').select('id')
-      ).eq('difficulty', diffVal).limit(1)
-      if (queryError) {
-        console.error('[upsertStock] 查询失败:', queryError.message)
-        return { success: false, error: queryError.message }
-      }
-      existing = data?.[0] || null
-    } else {
-      // difficulty 为空时，同时查找 NULL 和空字符串的记录
-      const { data: data1 } = await baseFilter(
-        supabase.from('stock').select('id')
-      ).is('difficulty', null).limit(1)
-      const { data: data2 } = await baseFilter(
-        supabase.from('stock').select('id')
-      ).eq('difficulty', '').limit(1)
-      existing = data1?.[0] || data2?.[0] || null
-    }
 
     const stockRow = {
       campus: stock.campus,
@@ -663,25 +703,37 @@ export const upsertStock = async (stock: Partial<StockItem>) => {
       remaining_stock: stock.remainingStock
     }
 
-    if (existing) {
-      // 已有记录，执行 update
-      const { error: updateError } = await supabase.from('stock')
-        .update(stockRow).eq('id', existing.id)
-      if (updateError) {
-        console.error('[upsertStock] 更新失败:', updateError.message)
-        return { success: false, error: updateError.message }
-      }
+    // 先查询是否已有记录
+    let existing: any = null
+    if (diffVal) {
+      const { data } = await baseFilter(
+        supabase.from('stock').select('id')
+      ).eq('difficulty', diffVal).limit(1)
+      existing = data?.[0] || null
     } else {
-      // 没有记录，执行 insert
-      const { error: insertError } = await supabase.from('stock').insert(stockRow)
-      if (insertError) {
-        console.error('[upsertStock] 插入失败:', insertError.message)
-        return { success: false, error: insertError.message }
-      }
+      const { data: data1 } = await baseFilter(
+        supabase.from('stock').select('id')
+      ).is('difficulty', null).limit(1)
+      const { data: data2 } = await baseFilter(
+        supabase.from('stock').select('id')
+      ).eq('difficulty', '').limit(1)
+      existing = data1?.[0] || data2?.[0] || null
     }
-    return { success: true }
+
+    let error = null
+    if (existing) {
+      const result = await supabase.from('stock').update(stockRow).eq('id', existing.id)
+      error = result.error
+    } else {
+      const result = await supabase.from('stock').insert(stockRow)
+      error = result.error
+    }
+    if (error) {
+      console.error('[upsertStock] 云端同步失败:', error.message)
+      markOffline()
+    }
+    return { success: !error, error: error?.message }
   }
-  console.warn('[upsertStock] 未连接云端，仅写入本地')
   return { success: true }
 }
 
@@ -1098,27 +1150,40 @@ export const fetchStockLogs = async (filters?: {
 
 // ==================== 预计/领取 ====================
 export const fetchForecasts = async () => {
-  if (await isReallyOnline()) {
-    const { data } = await supabase.from('forecasts').select('*').order('created_at', { ascending: false })
-    const result = data?.map(f => migrateGradeInRecord({
-      _id: f.id,
-      type: f.type,
-      bookName: f.book_name || '',
-      year: f.year || '',
-      term: f.term || '',
-      grade: f.grade || '',
-      subject: f.subject || '',
-      difficulty: f.difficulty || '',
-      campus: f.campus || '',
-      campusName: f.campus_name || '',
-      quantity: f.quantity || 0,
-      remark: f.remark || '',
-      status: f.status || 'pending',
-      operator: f.operator || '',
-      operatorName: f.operator_name || '',
-      createTime: new Date(f.created_at).getTime()
-    })) || []
-    return result
+  const online = await isReallyOnline()
+  if (online) {
+    try {
+      const { data, error } = await supabase.from('forecasts').select('*').order('created_at', { ascending: false })
+      if (error) {
+        console.error('[fetchForecasts] 读取云端失败:', error.message, error)
+        markOffline()
+        return localGetForecastData()
+      }
+      const result = data?.map(f => migrateGradeInRecord({
+        _id: f.id,
+        type: f.type,
+        bookName: f.book_name || '',
+        year: f.year || '',
+        term: f.term || '',
+        grade: f.grade || '',
+        subject: f.subject || '',
+        difficulty: f.difficulty || '',
+        campus: f.campus || '',
+        campusName: f.campus_name || '',
+        quantity: f.quantity || 0,
+        remark: f.remark || '',
+        status: f.status || 'pending',
+        operator: f.operator || '',
+        operatorName: f.operator_name || '',
+        createTime: new Date(f.created_at).getTime()
+      })) || []
+      localSetForecastData(result)
+      return result
+    } catch (e) {
+      console.error('[fetchForecasts] 云端请求异常:', e)
+      markOffline()
+      return localGetForecastData()
+    }
   }
   return localGetForecastData()
 }
@@ -1215,42 +1280,53 @@ export const fetchLogs = async () => {
   }
 
   if (online) {
-    const { data, error } = await supabase.from('logs').select('*').order('created_at', { ascending: false })
-    if (error) {
-      console.error('[fetchLogs] 读取云端失败:', error.message, error)
-      // 云端读取失败，回退到本地日志（本地也去重）
+    try {
+      const { data, error } = await supabase.from('logs').select('*').order('created_at', { ascending: false })
+      if (error) {
+        console.error('[fetchLogs] 读取云端失败:', error.message, error)
+        markOffline()
+        // 云端读取失败，回退到本地日志
+        const localLogs = localGetLogData()
+        localLogs.sort((a, b) => b.createTime - a.createTime)
+        return deduplicate(localLogs)
+      }
+      const cloudLogs = data?.map(l => migrateGradeInRecord({
+        _id: l.id,
+        stockId: l.stock_id,
+        type: l.type,
+        operator: l.operator,
+        operatorName: l.operator_name,
+        action: l.action,
+        detail: l.detail,
+        year: l.year,
+        term: l.term,
+        grade: l.grade,
+        subject: l.subject,
+        difficulty: l.difficulty || '',
+        campus: l.campus,
+        bookName: l.book_name,
+        quantity: l.quantity,
+        note: l.note,
+        createTime: new Date(l.created_at).getTime(),
+        createdAt: new Date(l.created_at).getTime()
+      })) || []
+
+      // 云端日志内部去重
+      const dedupedCloudLogs = deduplicate(cloudLogs)
+
+      // 在线模式下，以云端为唯一数据源
+      dedupedCloudLogs.sort((a, b) => b.createTime - a.createTime)
+      // 同步到本地
+      localSetLogData(dedupedCloudLogs)
+      return dedupedCloudLogs
+    } catch (e) {
+      console.error('[fetchLogs] 云端请求异常:', e)
+      markOffline()
+      // 云端异常，回退到本地日志
       const localLogs = localGetLogData()
       localLogs.sort((a, b) => b.createTime - a.createTime)
       return deduplicate(localLogs)
     }
-    const cloudLogs = data?.map(l => migrateGradeInRecord({
-      _id: l.id,
-      stockId: l.stock_id,
-      type: l.type,
-      operator: l.operator,
-      operatorName: l.operator_name,
-      action: l.action,
-      detail: l.detail,
-      year: l.year,
-      term: l.term,
-      grade: l.grade,
-      subject: l.subject,
-      difficulty: l.difficulty || '',
-      campus: l.campus,
-      bookName: l.book_name,
-      quantity: l.quantity,
-      note: l.note,
-      createTime: new Date(l.created_at).getTime(),
-      createdAt: new Date(l.created_at).getTime()
-    })) || []
-
-    // 云端日志内部去重（防止数据库中有重复记录）
-    const dedupedCloudLogs = deduplicate(cloudLogs)
-
-    // 在线模式下，以云端为唯一数据源，不再合并本地旧日志
-    // 日志只能通过用户实际的出入库操作创建并写入云端
-    dedupedCloudLogs.sort((a, b) => b.createTime - a.createTime)
-    return dedupedCloudLogs
   }
 
   // 离线模式：本地日志也做内部去重
