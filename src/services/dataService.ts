@@ -974,6 +974,12 @@ export const stockIn = async (data: {
   const finalLogType = logType || 'stock_in'
   const finalLogAction = logAction || '入库'
 
+  // 网络断线时拦截操作，不写入本地，避免数据冲突
+  const online = await isReallyOnline()
+  if (!online) {
+    return { success: false, message: '网络连接失败，数据未上传。\n请网络恢复后重试，或换一个网络正常的设备操作。' }
+  }
+
   // 防重复操作：3秒内相同的入库操作直接拦截
   if (checkDuplicateOperation({ type: finalLogType, campus, year, term, grade, subject, difficulty, quantity })) {
     return { success: true, message: finalLogAction + '成功' }
@@ -1056,6 +1062,12 @@ export const stockOut = async (data: {
   const { campus, year, term, grade, subject, difficulty, bookName, quantity, remark, operator, operatorName, scanOperate, logType, logAction } = data
   const finalLogType = logType || 'stock_out'
   const finalLogAction = logAction || '出库'
+
+  // 网络断线时拦截操作，不写入本地，避免数据冲突
+  const online = await isReallyOnline()
+  if (!online) {
+    return { success: false, message: '网络连接失败，数据未上传。\n请网络恢复后重试，或换一个网络正常的设备操作。' }
+  }
 
   // 防重复操作：3秒内相同的出库操作直接拦截
   if (checkDuplicateOperation({ type: finalLogType, campus, year, term, grade, subject, difficulty, quantity })) {
