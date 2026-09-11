@@ -2,7 +2,8 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  getDefaultYear, getDefaultTerm, getRole, getCampus, getUserInfo,
+  getDefaultYear, getDefaultTerm, setDefaultYear, setDefaultTerm,
+  getRole, getCampus, getUserInfo,
   canStockIn, canStockOut, canDeleteBook, canReceiveSet, canForecastSet, canStockReturn
 } from '../utils/storage'
 import { isCloudConnected, connectToCloud, isSupabaseConfigured } from '../utils/supabase'
@@ -51,6 +52,7 @@ let realtimeChannel: any = null
 let refreshTimer: any = null
 
 onMounted(async () => {
+  // 先从本地快速加载，再从云端同步
   selectedYear.value = getDefaultYear() || '2026'
   selectedTerm.value = getDefaultTerm() || '暑期'
   
@@ -60,6 +62,21 @@ onMounted(async () => {
     if (!connected) {
       console.log('[Stock] 云端未连接，尝试重连...')
       await connectToCloud()
+    }
+
+    // 从云端同步默认年度和时期
+    try {
+      const cloudDefaults = await ds.fetchDefaultYearTerm()
+      if (cloudDefaults.year) {
+        selectedYear.value = cloudDefaults.year
+        setDefaultYear(cloudDefaults.year)
+      }
+      if (cloudDefaults.term) {
+        selectedTerm.value = cloudDefaults.term
+        setDefaultTerm(cloudDefaults.term)
+      }
+    } catch (e) {
+      console.warn('[Stock] 同步默认时期失败:', e)
     }
 
     // 订阅实时变化，当其他设备修改数据时自动刷新
