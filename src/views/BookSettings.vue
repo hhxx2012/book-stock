@@ -729,11 +729,9 @@ const parseCSV = async (text: string) => {
       return
     }
 
-    // === 预加载一次所需数据（直接读本地 localStorage，毫秒级，避免 Supabase 访问卡死用户） ===
-    //     注意：fetchBooks()/fetchStock() 异步版内部会先 await isReallyOnline()，在 GitHub Pages
-    //     访问 Supabase 不通时要等 5-10 秒超时。导入场景直接同步读本地数据即可，秒出结果。
-    const bookListData: any[] = localOnlyGetBookList() || []
-    let stockListData: StockItem[] = localOnlyGetStockData() || []
+    // === 预加载一次所需数据 ===
+    const bookListData: any[] = await ds.fetchBooks()
+    let stockListData: StockItem[] = await ds.fetchStock()
     const now = Date.now()
 
     // 第一遍扫描：解析所有行，校验并检测冲突
@@ -868,7 +866,7 @@ const parseCSV = async (text: string) => {
       }
     }
 
-    // 第二遍：执行导入（全部纯 localStorage 同步写入，毫秒级完成，绝不卡用户）
+    // 第二遍：执行导入（逐条写入云端，云端成功后才写本地）
     for (const row of parsedRows) {
       if (!row.valid) continue
 
@@ -880,9 +878,8 @@ const parseCSV = async (text: string) => {
         }
 
         if (conflictMode === 'overwrite') {
-          // 覆盖：先删除原有本地书本/库存/日志/预测，再创建新记录
-          localOnlyDeleteBook(row.year, row.term, row.grade, row.subject, row.difficulty)
-          // 重新创建书本
+          // 覆盖：先删除原书本再创建新记录
+          await ds.deleteBook(row.year, row.term, row.grade, row.subject, row.difficulty)
           const newBook: any = {
             _id: generateId(),
             bookName: row.bookName,
@@ -897,55 +894,81 @@ const parseCSV = async (text: string) => {
             longhuaQuantity: row.longhuaQty,
             createTime: now
           }
-          let savedOk = true
-          try {
-            localOnlyAddBook(newBook)
-            bookListData.push(newBook)
-          } catch (e) {
-            savedOk = false
-            importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】创建书本失败：${(e as Error).message || e}`)
+          const bookResult = await ds.addBook(newBook)
+          if (!bookResult.success) {
+            importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】创建书本失败：${bookResult.error || '未知'}`)
+            continue
           }
-          if (savedOk) {
-            let stockFailed = false
-            try {
-              updateOrCreateStockPreloaded(stockListData, 'honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now, 'overwrite')
-            } catch (e) { stockFailed = true; importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】洪河校区库存覆盖失败：${(e as Error).message || e}`) }
-            try {
-              updateOrCreateStockPreloaded(stockListData, 'longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now, 'overwrite')
-            } catch (e) { stockFailed = true; importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】龙华校区库存覆盖失败：${(e as Error).message || e}`) }
-            // 覆盖模式写入入库日志（本地同步）
+          bookListData.push(newBook)
+          let stockFailed = false
+          const hhResult = await ds.upsertStock({
+            _id: generateId(), campus: 'honghe', campusName: '洪河校区',
+            year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
+            bookName: row.bookName, bookCode: row.bookCode,
+            totalQuantity: row.hongheQty, hongheQuantity: row.hongheQty, longhuaQuantity: row.longhuaQty,
+            totalIn: row.hongheQty, totalOut: 0, remainingStock: row.hongheQty, createTime: now, updateTime: now
+          })
+          if (!hhResult.success) { stockFailed = true; importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】洪河校区库存失败：${hhResult.error || ''}`) }
+          const lhResult = await ds.upsertStock({
+            _id: generateId(), campus: 'longhua', campusName: '龙华校区',
+            year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
+            bookName: row.bookName, bookCode: row.bookCode,
+            totalQuantity: row.longhuaQty, hongheQuantity: row.hongheQty, longhuaQuantity: row.longhuaQty,
+            totalIn: row.longhuaQty, totalOut: 0, remainingStock: row.longhuaQty, createTime: now, updateTime: now
+          })
+          if (!lhResult.success) { stockFailed = true; importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】龙华校区库存失败：${lhResult.error || ''}`) }
+          if (row.hongheQty > 0 || row.longhuaQty > 0) {
             const userInfo = getUserInfo()
-            if (row.hongheQty > 0) {
-              try {
-                localOnlyAddLog({
-                  type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
-                  action: '入库', detail: '批量导入(覆盖)',
-                  year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
-                  campus: 'honghe', bookName: row.bookName, quantity: row.hongheQty, note: '批量导入(覆盖)', createTime: now
-                })
-              } catch {}
-            }
-            if (row.longhuaQty > 0) {
-              try {
-                localOnlyAddLog({
-                  type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
-                  action: '入库', detail: '批量导入(覆盖)',
-                  year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
-                  campus: 'longhua', bookName: row.bookName, quantity: row.longhuaQty, note: '批量导入(覆盖)', createTime: now
-                })
-              } catch {}
-            }
-            if (!stockFailed) importResult.value.success++
+            await ds.addLog({
+              type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
+              action: '入库', detail: '批量导入(覆盖)',
+              year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
+              campus: row.hongheQty > 0 ? 'honghe' : 'longhua', bookName: row.bookName,
+              quantity: row.hongheQty + row.longhuaQty, note: '批量导入(覆盖)', createTime: now
+            })
           }
+          if (!stockFailed) importResult.value.success++
         } else {
           // 合并：在原有库存基础上累加
+          const existingStock = stockListData.find((s: StockItem) =>
+            s.year === row.year && s.term === row.term && s.grade === row.grade &&
+            s.subject === row.subject && s.difficulty === row.difficulty
+          )
+          const hhExisting = existingStock && existingStock.campus === 'honghe' ? existingStock : stockListData.find((s: StockItem) =>
+            s.campus === 'honghe' && s.year === row.year && s.term === row.term && s.grade === row.grade &&
+            s.subject === row.subject && s.difficulty === row.difficulty
+          )
+          const lhExisting = stockListData.find((s: StockItem) =>
+            s.campus === 'longhua' && s.year === row.year && s.term === row.term && s.grade === row.grade &&
+            s.subject === row.subject && s.difficulty === row.difficulty
+          )
           let mergeFailed = false
-          try {
-            updateOrCreateStockPreloaded(stockListData, 'honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now, 'merge')
-          } catch (e) { mergeFailed = true; importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】洪河校区库存累加失败：${(e as Error).message || e}`) }
-          try {
-            updateOrCreateStockPreloaded(stockListData, 'longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now, 'merge')
-          } catch (e) { mergeFailed = true; importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】龙华校区库存累加失败：${(e as Error).message || e}`) }
+          if (row.hongheQty > 0) {
+            const newQty = (hhExisting?.totalIn || 0) + row.hongheQty
+            const newRemaining = newQty - (hhExisting?.totalOut || 0)
+            const result = await ds.upsertStock({
+              _id: hhExisting?._id || generateId(), campus: 'honghe', campusName: '洪河校区',
+              year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
+              bookName: row.bookName, bookCode: row.bookCode,
+              totalQuantity: newRemaining, hongheQuantity: newRemaining, longhuaQuantity: lhExisting?.longhuaQuantity || 0,
+              totalIn: newQty, totalOut: hhExisting?.totalOut || 0, remainingStock: newRemaining,
+              createTime: hhExisting?.createTime || now, updateTime: now
+            })
+            if (!result.success) { mergeFailed = true; importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】洪河校区库存累加失败：${result.error || ''}`) }
+          }
+          if (row.longhuaQty > 0) {
+            const newQty = (lhExisting?.totalIn || 0) + row.longhuaQty
+            const newRemaining = newQty - (lhExisting?.totalOut || 0)
+            const result = await ds.upsertStock({
+              _id: lhExisting?._id || generateId(), campus: 'longhua', campusName: '龙华校区',
+              year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
+              bookName: row.bookName, bookCode: row.bookCode,
+              totalQuantity: newRemaining, hongheQuantity: hhExisting?.hongheQuantity || 0, longhuaQuantity: newRemaining,
+              totalIn: newQty, totalOut: lhExisting?.totalOut || 0, remainingStock: newRemaining,
+              createTime: lhExisting?.createTime || now, updateTime: now
+            })
+            if (!result.success) { mergeFailed = true; importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】龙华校区库存累加失败：${result.error || ''}`) }
+          }
           if (!mergeFailed) importResult.value.success++
           else importResult.value.skipped++
         }
@@ -965,47 +988,41 @@ const parseCSV = async (text: string) => {
           longhuaQuantity: row.longhuaQty,
           createTime: now
         }
-        let savedOk = true
-        try {
-          localOnlyAddBook(newBook)
-          bookListData.push(newBook)
-        } catch (e) {
-          savedOk = false
-          importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】创建书本失败：${(e as Error).message || e}`)
+        const bookResult = await ds.addBook(newBook)
+        if (!bookResult.success) {
+          importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】创建书本失败：${bookResult.error || '未知'}`)
+          continue
         }
-        if (savedOk) {
-          importResult.value.success++
-          try {
-            updateOrCreateStockPreloaded(stockListData, 'honghe', '洪河校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.hongheQty, now, 'merge')
-          } catch (e) { importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】洪河校区库存失败：${(e as Error).message || e}`) }
-          try {
-            updateOrCreateStockPreloaded(stockListData, 'longhua', '龙华校区', row.year, row.term, row.grade, row.subject, row.difficulty, row.bookName, row.longhuaQty, now, 'merge')
-          } catch (e) { importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】龙华校区库存失败：${(e as Error).message || e}`) }
-        }
+        bookListData.push(newBook)
+        importResult.value.success++
+        const hhResult = await ds.upsertStock({
+          _id: generateId(), campus: 'honghe', campusName: '洪河校区',
+          year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
+          bookName: row.bookName, bookCode: row.bookCode,
+          totalQuantity: row.hongheQty, hongheQuantity: row.hongheQty, longhuaQuantity: row.longhuaQty,
+          totalIn: row.hongheQty, totalOut: 0, remainingStock: row.hongheQty, createTime: now, updateTime: now
+        })
+        if (!hhResult.success) { importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】洪河校区库存失败：${hhResult.error || ''}`) }
+        const lhResult = await ds.upsertStock({
+          _id: generateId(), campus: 'longhua', campusName: '龙华校区',
+          year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
+          bookName: row.bookName, bookCode: row.bookCode,
+          totalQuantity: row.longhuaQty, hongheQuantity: row.hongheQty, longhuaQuantity: row.longhuaQty,
+          totalIn: row.longhuaQty, totalOut: 0, remainingStock: row.longhuaQty, createTime: now, updateTime: now
+        })
+        if (!lhResult.success) { importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】龙华校区库存失败：${lhResult.error || ''}`) }
       }
     }
 
     const { total, success, skipped, errors } = importResult.value
 
-    // —— 关键修复（终极版）：全部本地写入已经毫秒级完成了
-    // 1) 立刻从本地刷列表、立刻弹结果窗 → 1 秒内有反馈，绝不"没反应"
-    // 2) void 异步调 syncLocalToCloud 慢慢同步云端，失败/超时都不影响用户可见的结果
+    // 刷新列表并弹结果窗
     try {
-      bookList.value = localOnlyGetBookList() || []
+      await loadBooks()
     } catch (e) {
       console.warn('[导入] 刷新书本列表失败：', e)
     }
     showImportModal.value = true
-
-    // 后台异步同步到云端（失败、超时都无人值守，绝不阻塞结果弹窗）
-    // 说明：syncLocalToCloud 本身会把所有本地变更 upsert 到 Supabase
-    void Promise.resolve().then(async () => {
-      try {
-        await withTimeout(ds.syncLocalToCloud(), 30000, null, 'syncLocalToCloud(导入后云同步)')
-      } catch (e) {
-        console.warn('[导入后云同步] 失败或超时，数据已保留在本地，下次进入/导出时可继续同步：', e)
-      }
-    })
 
     // 如果 0 成功 + 0 跳过 + 有错误，额外弹窗告知用户（避免用户觉得"没反应"）
     if (success === 0 && skipped === 0 && errors.length > 0) {
