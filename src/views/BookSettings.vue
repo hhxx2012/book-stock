@@ -7,10 +7,8 @@ import { isCloudConnected, connectToCloud, isSupabaseConfigured } from '../utils
 import { generateId } from '../utils/mockData'
 import * as ds from '../services/dataService'
 import {
-  localOnlyAddBook, localOnlyDeleteBook, localOnlyUpsertStock, localOnlyAddLog,
-  localGetStockData as localOnlyGetStockData
+  localOnlyUpsertStock, localOnlyAddLog
 } from '../services/dataService'
-import { getBookList as localOnlyGetBookList } from '../utils/storage'
 import type { BookItem, StockItem } from '../types'
 
 const router = useRouter()
