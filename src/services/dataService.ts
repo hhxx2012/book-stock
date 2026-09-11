@@ -441,16 +441,20 @@ export const fetchDefaultYearTerm = async () => {
 }
 
 export const updateDefaultYearTerm = async (year: string, term: string) => {
-  // 始终写入 localStorage，保证离线可用
+  const online = await isReallyOnline()
+  if (!online) {
+    return { success: false, error: '网络连接失败，设置未上传。\n请网络恢复后重试。' }
+  }
+  const { error } = await supabase.from('system_settings').upsert([
+    { key: 'default_year', value: year },
+    { key: 'default_term', value: term }
+  ], { onConflict: 'key' })
+  if (error) {
+    return { success: false, error: error.message }
+  }
   setDefaultYear(year)
   setDefaultTerm(term)
-  // 如果真正在线，同时写入 Supabase
-  if (await isReallyOnline()) {
-    await supabase.from('system_settings').upsert([
-      { key: 'default_year', value: year },
-      { key: 'default_term', value: term }
-    ], { onConflict: 'key' })
-  }
+  return { success: true }
 }
 
 // ==================== 年级/科目/难度 ====================
@@ -511,53 +515,59 @@ export const fetchBooks = async () => {
 }
 
 export const addBook = async (book: any) => {
-  // 始终写入 localStorage，保证离线可用
+  const online = await isReallyOnline()
+  if (!online) {
+    return { success: false, error: '网络连接失败，数据未上传。\n请网络恢复后重试，或换一个网络正常的设备操作。' }
+  }
+  // 在线时先写云端，成功后再写本地，保证两边一致
+  const { error } = await supabase.from('books').insert({
+    book_name: book.bookName,
+    book_code: book.bookCode,
+    year: book.year,
+    term: book.term,
+    grade: book.grade,
+    subject: book.subject,
+    difficulty: book.difficulty || null,
+    total_quantity: book.totalQuantity || 0,
+    honghe_quantity: book.hongheQuantity || 0,
+    longhua_quantity: book.longhuaQuantity || 0
+  })
+  if (error) {
+    console.error('[addBook] 云端写入失败:', error.message)
+    markOffline()
+    return { success: false, error: '云端保存失败：' + error.message }
+  }
+  // 云端成功后才写本地
   const list = getBookList()
   list.push(book)
   setBookList(list)
-  // 如果真正在线，同时写入 Supabase
-  if (await isReallyOnline()) {
-    const { error } = await supabase.from('books').insert({
-      book_name: book.bookName,
-      book_code: book.bookCode,
-      year: book.year,
-      term: book.term,
-      grade: book.grade,
-      subject: book.subject,
-      difficulty: book.difficulty || null,
-      total_quantity: book.totalQuantity || 0,
-      honghe_quantity: book.hongheQuantity || 0,
-      longhua_quantity: book.longhuaQuantity || 0
-    })
-    if (error) {
-      console.error('[addBook] 云端同步失败:', error.message)
-      markOffline()
-    }
-    return { success: !error, error: error?.message }
-  }
   return { success: true }
 }
 
 export const updateBook = async (id: string, updates: any) => {
-  // 始终写入 localStorage，保证离线可用
+  const online = await isReallyOnline()
+  if (!online) {
+    return { success: false, error: '网络连接失败，数据未上传。\n请网络恢复后重试，或换一个网络正常的设备操作。' }
+  }
+  const { error } = await supabase.from('books').update({
+    book_name: updates.bookName,
+    book_code: updates.bookCode,
+    year: updates.year,
+    term: updates.term,
+    grade: updates.grade,
+    subject: updates.subject,
+    difficulty: updates.difficulty || null
+  }).eq('id', id)
+  if (error) {
+    console.error('[updateBook] 云端更新失败:', error.message)
+    markOffline()
+    return { success: false, error: '云端保存失败：' + error.message }
+  }
   const list = getBookList()
   const idx = list.findIndex((b: BookItem) => b._id === id)
   if (idx >= 0) {
     list[idx] = { ...list[idx], ...updates }
     setBookList(list)
-  }
-  // 如果真正在线，同时写入 Supabase
-  if (await isReallyOnline()) {
-    const { error } = await supabase.from('books').update({
-      book_name: updates.bookName,
-      book_code: updates.bookCode,
-      year: updates.year,
-      term: updates.term,
-      grade: updates.grade,
-      subject: updates.subject,
-      difficulty: updates.difficulty || null
-    }).eq('id', id)
-    return { success: !error, error: error?.message }
   }
   return { success: true }
 }
@@ -566,15 +576,16 @@ export const deleteBook = async (year: string, term: string, grade: string, subj
   const matchFields: Record<string, string> = { year, term, grade, subject }
   const diffVal = difficulty || null
 
-  // 构建 Supabase 删除查询（同时处理 difficulty 为 null 和空字符串的情况）
-  // 旧数据中 difficulty 可能是 NULL 也可能是空字符串 ''，两种都要删除
+  const online = await isReallyOnline()
+  if (!online) {
+    return { success: false, error: '网络连接失败，数据未上传。\n请网络恢复后重试，或换一个网络正常的设备操作。' }
+  }
+
   const deleteMatch = async (table: string) => {
     if (diffVal) {
-      // 有难度值：精确匹配
       const { error } = await supabase.from(table).delete().match(matchFields).eq('difficulty', diffVal)
       if (error) console.error(`[deleteBook] 删除 ${table} (difficulty=${diffVal}) 失败:`, error.message)
     } else {
-      // 无难度值：同时删除 difficulty 为 NULL 和空字符串的记录
       const { error: err1 } = await supabase.from(table).delete().match(matchFields).is('difficulty', null)
       if (err1) console.error(`[deleteBook] 删除 ${table} (difficulty IS NULL) 失败:`, err1.message)
       const { error: err2 } = await supabase.from(table).delete().match(matchFields).eq('difficulty', '')
@@ -582,7 +593,15 @@ export const deleteBook = async (year: string, term: string, grade: string, subj
     }
   }
 
-  // 始终删除 localStorage，保证离线可用
+  // 先删云端
+  await Promise.all([
+    deleteMatch('books'),
+    deleteMatch('stock'),
+    deleteMatch('logs'),
+    deleteMatch('forecasts')
+  ])
+
+  // 云端删除后再删本地
   const bookList = getBookList()
   const newList = bookList.filter((b: BookItem) =>
     !((b as any).year === year && (b as any).term === term && b.grade === grade && b.subject === subject && b.difficulty === difficulty)
@@ -606,16 +625,6 @@ export const deleteBook = async (year: string, term: string, grade: string, subj
     !(f.year === year && f.term === term && f.grade === grade && f.subject === subject && f.difficulty === difficulty)
   )
   localSetForecastData(newForecasts)
-
-  // 如果真正在线，同时删除 Supabase
-  if (await isReallyOnline()) {
-    await Promise.all([
-      deleteMatch('books'),
-      deleteMatch('stock'),
-      deleteMatch('logs'),
-      deleteMatch('forecasts')
-    ])
-  }
 
   return { success: true }
 }
@@ -666,7 +675,64 @@ export const fetchStock = async () => {
 }
 
 export const upsertStock = async (stock: Partial<StockItem>) => {
-  // 始终写入 localStorage，保证离线可用
+  const online = await isReallyOnline()
+  if (!online) {
+    return { success: false, error: '网络连接失败，数据未上传。\n请网络恢复后重试，或换一个网络正常的设备操作。' }
+  }
+
+  const diffVal = stock.difficulty || null
+  const baseFilter = (q: any) => q.eq('campus', stock.campus || '')
+    .eq('year', stock.year || '').eq('term', stock.term || '')
+    .eq('grade', stock.grade || '').eq('subject', stock.subject || '')
+
+  const stockRow = {
+    campus: stock.campus,
+    campus_name: stock.campusName,
+    year: stock.year,
+    term: stock.term,
+    grade: stock.grade,
+    subject: stock.subject,
+    difficulty: stock.difficulty || null,
+    book_name: stock.bookName,
+    book_code: stock.bookCode,
+    total_quantity: stock.totalQuantity,
+    honghe_quantity: stock.hongheQuantity,
+    longhua_quantity: stock.longhuaQuantity,
+    total_in: stock.totalIn,
+    total_out: stock.totalOut,
+    remaining_stock: stock.remainingStock
+  }
+
+  let existing: any = null
+  if (diffVal) {
+    const { data } = await baseFilter(
+      supabase.from('stock').select('id')
+    ).eq('difficulty', diffVal).limit(1)
+    existing = data?.[0] || null
+  } else {
+    const { data: data1 } = await baseFilter(
+      supabase.from('stock').select('id')
+    ).is('difficulty', null).limit(1)
+    const { data: data2 } = await baseFilter(
+      supabase.from('stock').select('id')
+    ).eq('difficulty', '').limit(1)
+    existing = data1?.[0] || data2?.[0] || null
+  }
+
+  let error = null
+  if (existing) {
+    const result = await supabase.from('stock').update(stockRow).eq('id', existing.id)
+    error = result.error
+  } else {
+    const result = await supabase.from('stock').insert(stockRow)
+    error = result.error
+  }
+  if (error) {
+    console.error('[upsertStock] 云端同步失败:', error.message)
+    markOffline()
+    return { success: false, error: '云端保存失败：' + error.message }
+  }
+  // 云端成功后才写本地
   const list = localGetStockData()
   const idx = list.findIndex((s: StockItem) =>
     s.campus === stock.campus && s.year === stock.year && s.term === stock.term &&
@@ -678,62 +744,6 @@ export const upsertStock = async (stock: Partial<StockItem>) => {
     list.push(stock as StockItem)
   }
   localSetStockData(list)
-  // 如果真正在线，同时写入 Supabase
-  if (await isReallyOnline()) {
-    const diffVal = stock.difficulty || null
-    const baseFilter = (q: any) => q.eq('campus', stock.campus || '')
-      .eq('year', stock.year || '').eq('term', stock.term || '')
-      .eq('grade', stock.grade || '').eq('subject', stock.subject || '')
-
-    const stockRow = {
-      campus: stock.campus,
-      campus_name: stock.campusName,
-      year: stock.year,
-      term: stock.term,
-      grade: stock.grade,
-      subject: stock.subject,
-      difficulty: stock.difficulty || null,
-      book_name: stock.bookName,
-      book_code: stock.bookCode,
-      total_quantity: stock.totalQuantity,
-      honghe_quantity: stock.hongheQuantity,
-      longhua_quantity: stock.longhuaQuantity,
-      total_in: stock.totalIn,
-      total_out: stock.totalOut,
-      remaining_stock: stock.remainingStock
-    }
-
-    // 先查询是否已有记录
-    let existing: any = null
-    if (diffVal) {
-      const { data } = await baseFilter(
-        supabase.from('stock').select('id')
-      ).eq('difficulty', diffVal).limit(1)
-      existing = data?.[0] || null
-    } else {
-      const { data: data1 } = await baseFilter(
-        supabase.from('stock').select('id')
-      ).is('difficulty', null).limit(1)
-      const { data: data2 } = await baseFilter(
-        supabase.from('stock').select('id')
-      ).eq('difficulty', '').limit(1)
-      existing = data1?.[0] || data2?.[0] || null
-    }
-
-    let error = null
-    if (existing) {
-      const result = await supabase.from('stock').update(stockRow).eq('id', existing.id)
-      error = result.error
-    } else {
-      const result = await supabase.from('stock').insert(stockRow)
-      error = result.error
-    }
-    if (error) {
-      console.error('[upsertStock] 云端同步失败:', error.message)
-      markOffline()
-    }
-    return { success: !error, error: error?.message }
-  }
   return { success: true }
 }
 
@@ -1201,69 +1211,69 @@ export const fetchForecasts = async () => {
 }
 
 export const addForecast = async (item: Partial<ForecastItem>) => {
-  // 始终写入 localStorage，保证离线可用
+  const online = await isReallyOnline()
+  if (!online) {
+    return { success: false, error: '网络连接失败，数据未上传。\n请网络恢复后重试，或换一个网络正常的设备操作。' }
+  }
+  const { error } = await supabase.from('forecasts').insert({
+    type: item.type,
+    book_name: item.bookName,
+    year: item.year,
+    term: item.term,
+    grade: item.grade,
+    subject: item.subject,
+    difficulty: item.difficulty || null,
+    campus: item.campus,
+    campus_name: item.campusName,
+    quantity: item.quantity,
+    remark: item.remark,
+    status: item.status,
+    operator: item.operator,
+    operator_name: item.operatorName
+  })
+  if (error) {
+    console.error('[addForecast] 写入云端失败:', error.message, error)
+    return { success: false, error: '云端保存失败：' + error.message }
+  }
   const list = localGetForecastData()
   list.push(item as ForecastItem)
   localSetForecastData(list)
-  // 如果真正在线，同时写入 Supabase
-  const online = await isReallyOnline()
-  if (online) {
-    const { error } = await supabase.from('forecasts').insert({
-      type: item.type,
-      book_name: item.bookName,
-      year: item.year,
-      term: item.term,
-      grade: item.grade,
-      subject: item.subject,
-      difficulty: item.difficulty || null,
-      campus: item.campus,
-      campus_name: item.campusName,
-      quantity: item.quantity,
-      remark: item.remark,
-      status: item.status,
-      operator: item.operator,
-      operator_name: item.operatorName
-    })
-    if (error) {
-      console.error('[addForecast] 写入云端失败:', error.message, error)
-    }
-    return { success: !error, error: error?.message }
-  }
-  console.warn('[addForecast] 未连接云端，仅写入本地')
   return { success: true }
 }
 
 export const deleteForecasts = async (ids: string[]) => {
-  // 始终删除 localStorage，保证离线可用
+  const online = await isReallyOnline()
+  if (!online) {
+    return { success: false, error: '网络连接失败，数据未上传。\n请网络恢复后重试，或换一个网络正常的设备操作。' }
+  }
+  const { error } = await supabase.from('forecasts').delete().in('id', ids)
+  if (error) {
+    return { success: false, error: error.message }
+  }
   const list = localGetForecastData()
   const newList = list.filter((f: ForecastItem) => !ids.includes(f._id))
   localSetForecastData(newList)
-  // 如果真正在线，同时删除 Supabase
-  if (await isReallyOnline()) {
-    const { error } = await supabase.from('forecasts').delete().in('id', ids)
-    if (error) {
-      return { success: false, error: error.message }
-    }
-  }
   return { success: true }
 }
 
 export const updateForecast = async (id: string, updates: Partial<ForecastItem>) => {
-  // 始终写入 localStorage，保证离线可用
+  const online = await isReallyOnline()
+  if (!online) {
+    return { success: false, error: '网络连接失败，数据未上传。\n请网络恢复后重试，或换一个网络正常的设备操作。' }
+  }
+  const updateData: any = {}
+  if (updates.quantity !== undefined) updateData.quantity = updates.quantity
+  if (updates.remark !== undefined) updateData.remark = updates.remark
+  if (updates.status !== undefined) updateData.status = updates.status
+  const { error } = await supabase.from('forecasts').update(updateData).eq('id', id)
+  if (error) {
+    return { success: false, error: error.message }
+  }
   const list = localGetForecastData()
   const idx = list.findIndex((f: ForecastItem) => f._id === id)
   if (idx >= 0) {
     list[idx] = { ...list[idx], ...updates }
     localSetForecastData(list)
-  }
-  // 如果真正在线，同时写入 Supabase（只更新有值的字段，避免覆盖为null）
-  if (await isReallyOnline()) {
-    const updateData: any = {}
-    if (updates.quantity !== undefined) updateData.quantity = updates.quantity
-    if (updates.remark !== undefined) updateData.remark = updates.remark
-    if (updates.status !== undefined) updateData.status = updates.status
-    const { error } = await supabase.from('forecasts').update(updateData).eq('id', id)
-    return { success: !error, error: error?.message }
   }
   return { success: true }
 }
@@ -1348,40 +1358,34 @@ export const fetchLogs = async () => {
 }
 
 export const addLog = async (log: Partial<LogItem>) => {
-  console.log('[addLog] 写入日志:', { type: log.type, year: log.year, term: log.term, grade: log.grade, subject: log.subject, difficulty: log.difficulty, campus: log.campus, quantity: log.quantity })
-
-  // 始终写入 localStorage，保证离线可用
+  const online = await isReallyOnline()
+  if (!online) {
+    return { success: false, error: '网络连接失败，日志未上传。\n请网络恢复后重试，或换一个网络正常的设备操作。' }
+  }
+  const { error } = await supabase.from('logs').insert({
+    stock_id: log.stockId,
+    type: log.type,
+    operator: log.operator,
+    operator_name: log.operatorName,
+    action: log.action,
+    detail: log.detail,
+    year: log.year,
+    term: log.term,
+    grade: log.grade,
+    subject: log.subject,
+    difficulty: log.difficulty || null,
+    campus: log.campus,
+    book_name: log.bookName,
+    quantity: log.quantity,
+    note: log.note
+  })
+  if (error) {
+    console.error('[addLog] 写入云端失败:', error.message, error)
+    return { success: false, error: '云端保存失败：' + error.message }
+  }
   const list = localGetLogData()
   list.push(log as LogItem)
   localSetLogData(list)
-  // 如果真正在线，同时写入 Supabase
-  const online = await isReallyOnline()
-  if (online) {
-    const { error } = await supabase.from('logs').insert({
-      stock_id: log.stockId,
-      type: log.type,
-      operator: log.operator,
-      operator_name: log.operatorName,
-      action: log.action,
-      detail: log.detail,
-      year: log.year,
-      term: log.term,
-      grade: log.grade,
-      subject: log.subject,
-      difficulty: log.difficulty || null,
-      campus: log.campus,
-      book_name: log.bookName,
-      quantity: log.quantity,
-      note: log.note
-    })
-    if (error) {
-      console.error('[addLog] 写入云端失败:', error.message, error)
-    } else {
-      console.log('[addLog] 写入云端成功')
-    }
-    return { success: !error, error: error?.message }
-  }
-  console.warn('[addLog] 未连接云端，仅写入本地')
   return { success: true }
 }
 
@@ -1397,14 +1401,18 @@ export const fetchRolePermissions = async () => {
 }
 
 export const updateRolePermissions = async (role: string, permissions: string[]) => {
-  // 始终写入 localStorage，保证离线可用
+  const online = await isReallyOnline()
+  if (!online) {
+    return { success: false, error: '网络连接失败，数据未上传。\n请网络恢复后重试，或换一个网络正常的设备操作。' }
+  }
+  const { error } = await supabase.from('role_permissions').upsert({ role, permissions }, { onConflict: 'role' })
+  if (error) {
+    return { success: false, error: error.message }
+  }
   const all = getRolePermissions()
   all[role] = permissions
   setRolePermissions(all)
-  // 如果真正在线，同时写入 Supabase
-  if (await isReallyOnline()) {
-    await supabase.from('role_permissions').upsert({ role, permissions }, { onConflict: 'role' })
-  }
+  return { success: true }
 }
 
 // ==================== 用户管理 ====================
@@ -1430,76 +1438,75 @@ export const fetchUsers = async () => {
 }
 
 export const addUser = async (user: any) => {
-  // 始终写入 localStorage
-  const list = getUserList()
-  list.push(user)
-  setUserList(list)
-  // 如果真正在线，同时写入 Supabase
-  if (await isReallyOnline()) {
-    const { data, error } = await supabase.from('users').insert({
-      user_name: user.userName,
-      nick_name: user.nickName,
-      role: user.role,
-      campus: user.campus,
-      campus_name: user.campusName,
-      roles: user.roles,
-      campuses: user.campuses,
-      password: user.password
-    }).select('id').single()
-    
-    if (error) {
-      console.error('[addUser] Supabase写入失败:', error.message)
-      return { success: false, error: error.message }
-    }
-    
-    // 将 Supabase 生成的 UUID 同步回 localStorage，确保 _id 一致
-    if (data?.id) {
-      const updatedList = getUserList()
-      const idx = updatedList.findIndex((u: any) => u._id === user._id)
-      if (idx >= 0) {
-        updatedList[idx]._id = data.id
-        setUserList(updatedList)
-      }
-    }
-    return { success: true }
+  const online = await isReallyOnline()
+  if (!online) {
+    return { success: false, error: '网络连接失败，数据未上传。\n请网络恢复后重试，或换一个网络正常的设备操作。' }
   }
+  const { data, error } = await supabase.from('users').insert({
+    user_name: user.userName,
+    nick_name: user.nickName,
+    role: user.role,
+    campus: user.campus,
+    campus_name: user.campusName,
+    roles: user.roles,
+    campuses: user.campuses,
+    password: user.password
+  }).select('id').single()
+
+  if (error) {
+    console.error('[addUser] Supabase写入失败:', error.message)
+    return { success: false, error: error.message }
+  }
+
+  const userData = { ...user }
+  if (data?.id) {
+    userData._id = data.id
+  }
+  const list = getUserList()
+  list.push(userData)
+  setUserList(list)
   return { success: true }
 }
 
 export const updateUser = async (id: string, updates: any) => {
-  // 始终写入 localStorage
+  const online = await isReallyOnline()
+  if (!online) {
+    return { success: false, error: '网络连接失败，数据未上传。\n请网络恢复后重试，或换一个网络正常的设备操作。' }
+  }
+  const updateData: any = {}
+  if (updates.nickName !== undefined) updateData.nick_name = updates.nickName
+  if (updates.role !== undefined) updateData.role = updates.role
+  if (updates.campus !== undefined) updateData.campus = updates.campus
+  if (updates.campusName !== undefined) updateData.campus_name = updates.campusName
+  if (updates.roles !== undefined) updateData.roles = updates.roles
+  if (updates.campuses !== undefined) updateData.campuses = updates.campuses
+  if (updates.password !== undefined) updateData.password = updates.password
+
+  const { error } = await supabase.from('users').update(updateData).eq('id', id)
+  if (error) {
+    return { success: false, error: error.message }
+  }
   const list = getUserList()
   const idx = list.findIndex((u: any) => u._id === id)
   if (idx >= 0) {
     list[idx] = { ...list[idx], ...updates }
     setUserList(list)
   }
-  // 如果真正在线，同时写入 Supabase
-  if (await isReallyOnline()) {
-    const updateData: any = {}
-    if (updates.nickName !== undefined) updateData.nick_name = updates.nickName
-    if (updates.role !== undefined) updateData.role = updates.role
-    if (updates.campus !== undefined) updateData.campus = updates.campus
-    if (updates.campusName !== undefined) updateData.campus_name = updates.campusName
-    if (updates.roles !== undefined) updateData.roles = updates.roles
-    if (updates.campuses !== undefined) updateData.campuses = updates.campuses
-    if (updates.password !== undefined) updateData.password = updates.password
-    
-    const { error } = await supabase.from('users').update(updateData).eq('id', id)
-    return { success: !error, error: error?.message }
-  }
   return { success: true }
 }
 
 export const deleteUser = async (id: string) => {
-  // 始终删除 localStorage
+  const online = await isReallyOnline()
+  if (!online) {
+    return { success: false, error: '网络连接失败，数据未上传。\n请网络恢复后重试，或换一个网络正常的设备操作。' }
+  }
+  const { error } = await supabase.from('users').delete().eq('id', id)
+  if (error) {
+    return { success: false, error: error.message }
+  }
   const list = getUserList()
   const newList = list.filter((u: any) => u._id !== id)
   setUserList(newList)
-  // 如果真正在线，同时删除 Supabase
-  if (await isReallyOnline()) {
-    await supabase.from('users').delete().eq('id', id)
-  }
   return { success: true }
 }
 
