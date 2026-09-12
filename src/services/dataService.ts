@@ -703,26 +703,34 @@ export const upsertStock = async (stock: Partial<StockItem>) => {
     remaining_stock: stock.remainingStock
   }
 
-  let existing: any = null
+  let existingIds: string[] = []
   if (diffVal) {
     const { data } = await baseFilter(
       supabase.from('stock').select('id')
-    ).eq('difficulty', diffVal).limit(1)
-    existing = data?.[0] || null
+    ).eq('difficulty', diffVal)
+    existingIds = data?.map((r: any) => r.id) || []
   } else {
+    // difficulty 为空时，同时匹配 null 和 ''，避免更新错记录
     const { data: data1 } = await baseFilter(
       supabase.from('stock').select('id')
-    ).is('difficulty', null).limit(1)
+    ).is('difficulty', null)
     const { data: data2 } = await baseFilter(
       supabase.from('stock').select('id')
-    ).eq('difficulty', '').limit(1)
-    existing = data1?.[0] || data2?.[0] || null
+    ).eq('difficulty', '')
+    existingIds = [...(data1 || []), ...(data2 || [])].map((r: any) => r.id)
   }
 
   let error = null
-  if (existing) {
-    const result = await supabase.from('stock').update(stockRow).eq('id', existing.id)
+  if (existingIds.length > 0) {
+    // 更新所有匹配记录，确保 null 和 '' 的记录数据一致
+    const result = await supabase.from('stock').update(stockRow).in('id', existingIds)
     error = result.error
+
+    // 如果有多条重复记录，保留第一条，删除其余
+    if (!error && existingIds.length > 1) {
+      const idsToDelete = existingIds.slice(1)
+      await supabase.from('stock').delete().in('id', idsToDelete)
+    }
   } else {
     const result = await supabase.from('stock').insert(stockRow)
     error = result.error
@@ -734,12 +742,29 @@ export const upsertStock = async (stock: Partial<StockItem>) => {
   }
   // 云端成功后才写本地
   const list = localGetStockData()
-  const idx = list.findIndex((s: StockItem) =>
-    s.campus === stock.campus && s.year === stock.year && s.term === stock.term &&
-    s.grade === stock.grade && s.subject === stock.subject && s.difficulty === stock.difficulty
-  )
-  if (idx >= 0) {
-    list[idx] = { ...list[idx], ...stock } as StockItem
+  // 匹配本地记录：difficulty 为空时同时匹配 '' 和 null（兼容旧数据）
+  const diffValLocal = stock.difficulty || ''
+  const indices = list.reduce((acc: number[], s: StockItem, i: number) => {
+    const sDiff = s.difficulty || ''
+    if (s.campus === stock.campus && s.year === stock.year && s.term === stock.term &&
+        s.grade === stock.grade && s.subject === stock.subject && sDiff === diffValLocal) {
+      acc.push(i)
+    }
+    return acc
+  }, [])
+  if (indices.length > 0) {
+    // 更新所有匹配记录，并删除重复
+    indices.forEach((idx, n) => {
+      if (n === 0) {
+        list[idx] = { ...list[idx], ...stock } as StockItem
+      } else {
+        // 标记后续重复记录为删除（从后往前删避免索引错位）
+      }
+    })
+    // 从后往前删除重复记录
+    for (let i = indices.length - 1; i >= 1; i--) {
+      list.splice(indices[i], 1)
+    }
   } else {
     list.push(stock as StockItem)
   }
@@ -760,7 +785,9 @@ export const cleanupOrphanedStock = async () => {
 
     // 找出孤立库存记录（没有对应书本的）
     const orphanedIds: string[] = []
-    const seenKeys = new Map<string, string>() // key -> first record id
+    // 保留的记录及其合并后的数据
+    const mergeUpdates: any[] = []
+    const seenKeys = new Map<string, any>() // key -> first record (with merged data)
 
     for (const s of stockList) {
       const key = `${s.year}-${s.term}-${s.grade}-${s.subject}-${s.difficulty || ''}`
@@ -771,12 +798,38 @@ export const cleanupOrphanedStock = async () => {
         // 有对应书本，检查是否有重复
         const uniqueKey = `${key}-${s.campus}`
         if (seenKeys.has(uniqueKey)) {
-          // 重复记录，也标记为需要清理
+          // 重复记录：合并数据后删除
+          const first = seenKeys.get(uniqueKey)
+          first.totalIn = Math.max(first.totalIn || 0, s.totalIn || 0)
+          first.totalOut = Math.max(first.totalOut || 0, s.totalOut || 0)
+          first.remainingStock = first.totalIn - first.totalOut
           orphanedIds.push(s._id || '')
         } else {
-          seenKeys.set(uniqueKey, s._id || '')
+          seenKeys.set(uniqueKey, { ...s })
         }
       }
+    }
+
+    // 将合并后的数据写回保留的记录
+    for (const record of seenKeys.values()) {
+      const original = stockList.find(s => s._id === record._id)
+      if (original && (original.totalIn !== record.totalIn || original.totalOut !== record.totalOut)) {
+        mergeUpdates.push({
+          id: record._id,
+          total_in: record.totalIn,
+          total_out: record.totalOut,
+          remaining_stock: record.remainingStock
+        })
+      }
+    }
+
+    // 先更新合并后的记录
+    for (const update of mergeUpdates) {
+      await supabase.from('stock').update({
+        total_in: update.total_in,
+        total_out: update.total_out,
+        remaining_stock: update.remaining_stock
+      }).eq('id', update.id)
     }
 
     if (orphanedIds.length > 0) {
@@ -789,6 +842,15 @@ export const cleanupOrphanedStock = async () => {
         // 同时清理本地 localStorage
         const localStock = localGetStockData()
         const cleaned = localStock.filter((s: StockItem) => !orphanedIds.includes(s._id || ''))
+        // 更新本地保留记录的合并数据
+        for (const update of mergeUpdates) {
+          const idx = cleaned.findIndex(s => s._id === update.id)
+          if (idx >= 0) {
+            cleaned[idx].totalIn = update.total_in
+            cleaned[idx].totalOut = update.total_out
+            cleaned[idx].remainingStock = update.remaining_stock
+          }
+        }
         localSetStockData(cleaned)
         console.log(`[cleanupOrphanedStock] 清理完成，删除 ${orphanedIds.length} 条`)
       }
@@ -936,17 +998,21 @@ export const fetchMergedStock = async (filters?: {
       }
     }
     if (item.campus === 'honghe') {
-      booksMap[key].hongheStock = item.remainingStock || 0
-      booksMap[key].hongheTotalIn = item.totalIn || 0
-      booksMap[key].hongheTotalOut = item.totalOut || 0
-      booksMap[key].hongheQuantity = item.remainingStock || 0
+      booksMap[key].hongheTotalIn = Math.max(booksMap[key].hongheTotalIn || 0, item.totalIn || 0)
+      booksMap[key].hongheTotalOut = Math.max(booksMap[key].hongheTotalOut || 0, item.totalOut || 0)
     } else {
-      booksMap[key].longhuaStock = item.remainingStock || 0
-      booksMap[key].longhuaTotalIn = item.totalIn || 0
-      booksMap[key].longhuaTotalOut = item.totalOut || 0
-      booksMap[key].longhuaQuantity = item.remainingStock || 0
+      booksMap[key].longhuaTotalIn = Math.max(booksMap[key].longhuaTotalIn || 0, item.totalIn || 0)
+      booksMap[key].longhuaTotalOut = Math.max(booksMap[key].longhuaTotalOut || 0, item.totalOut || 0)
     }
-    booksMap[key].totalQuantity = (booksMap[key].hongheStock || 0) + (booksMap[key].longhuaStock || 0)
+  })
+
+  // 重新计算剩余库存（从 totalIn - totalOut 推导，避免重复记录导致数据不一致）
+  Object.values(booksMap).forEach((item: any) => {
+    item.hongheStock = (item.hongheTotalIn || 0) - (item.hongheTotalOut || 0)
+    item.longhuaStock = (item.longhuaTotalIn || 0) - (item.longhuaTotalOut || 0)
+    item.hongheQuantity = item.hongheStock
+    item.longhuaQuantity = item.longhuaStock
+    item.totalQuantity = item.hongheStock + item.longhuaStock
   })
 
   let mergedList = Object.values(booksMap)
