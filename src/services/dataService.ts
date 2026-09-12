@@ -973,7 +973,7 @@ export const fetchMergedStock = async (filters?: {
 
   const booksMap: Record<string, any> = {}
   filtered.forEach((item: StockItem) => {
-    const key = `${item.year}-${item.term}-${item.grade}-${item.subject}-${item.difficulty}`
+    const key = `${item.year}-${item.term}-${item.grade}-${item.subject}-${item.difficulty || ''}`
     if (!booksMap[key]) {
       booksMap[key] = {
         _id: key,
@@ -1007,6 +1007,8 @@ export const fetchMergedStock = async (filters?: {
   })
 
   // 从日志表重新计算 totalIn/totalOut，确保即使库存表数据不一致也能正确显示
+  // 策略：先用日志计算，如果日志有数据则用日志值，否则保留库存表的值（取 max）
+  const logCalculated: Record<string, { hongheIn: number; hongheOut: number; longhuaIn: number; longhuaOut: number }> = {}
   try {
     const allLogs = await fetchLogs()
     // 按当前筛选条件过滤日志
@@ -1030,18 +1032,12 @@ export const fetchMergedStock = async (filters?: {
       return true
     })
 
-    // 重置所有 totalIn/totalOut 为 0，然后从日志重新累加
-    Object.values(booksMap).forEach((item: any) => {
-      item.hongheTotalIn = 0
-      item.hongheTotalOut = 0
-      item.longhuaTotalIn = 0
-      item.longhuaTotalOut = 0
-    })
-
+    // 从日志累加计算
     relevantLogs.forEach((log: any) => {
       const key = `${log.year}-${log.term}-${log.grade}-${log.subject}-${log.difficulty || ''}`
-      const item = booksMap[key]
-      if (!item) return
+      if (!logCalculated[key]) {
+        logCalculated[key] = { hongheIn: 0, hongheOut: 0, longhuaIn: 0, longhuaOut: 0 }
+      }
 
       const qty = Math.abs(log.quantity || 0)
       const isReturnIn = log.type === 'stock_return' && log.action === '退回入库'
@@ -1049,21 +1045,33 @@ export const fetchMergedStock = async (filters?: {
 
       if (log.campus === 'honghe') {
         if (log.type === 'stock_in' || isReturnOut) {
-          item.hongheTotalIn += qty
+          logCalculated[key].hongheIn += qty
         } else if (log.type === 'stock_out' || isReturnIn) {
-          item.hongheTotalOut += qty
+          logCalculated[key].hongheOut += qty
         }
       } else {
         if (log.type === 'stock_in' || isReturnOut) {
-          item.longhuaTotalIn += qty
+          logCalculated[key].longhuaIn += qty
         } else if (log.type === 'stock_out' || isReturnIn) {
-          item.longhuaTotalOut += qty
+          logCalculated[key].longhuaOut += qty
         }
       }
     })
   } catch (e) {
     console.warn('[fetchMergedStock] 从日志重算入库/出库失败，使用库存表数据:', e)
   }
+
+  // 用日志计算的值更新 booksMap，取 max(库存表值, 日志值)
+  Object.keys(booksMap).forEach((key) => {
+    const item = booksMap[key]
+    const logData = logCalculated[key]
+    if (logData) {
+      item.hongheTotalIn = Math.max(item.hongheTotalIn || 0, logData.hongheIn)
+      item.hongheTotalOut = Math.max(item.hongheTotalOut || 0, logData.hongheOut)
+      item.longhuaTotalIn = Math.max(item.longhuaTotalIn || 0, logData.longhuaIn)
+      item.longhuaTotalOut = Math.max(item.longhuaTotalOut || 0, logData.longhuaOut)
+    }
+  })
 
   // 重新计算剩余库存（从 totalIn - totalOut 推导）
   Object.values(booksMap).forEach((item: any) => {
@@ -1288,7 +1296,7 @@ export const fetchStockLogs = async (filters?: {
   if (filters?.term) filtered = filtered.filter(l => l.term === filters.term)
   if (filters?.grade) filtered = filtered.filter(l => l.grade === filters.grade)
   if (filters?.subject) filtered = filtered.filter(l => l.subject === filters.subject)
-  if (filters?.difficulty) filtered = filtered.filter(l => l.difficulty === filters.difficulty)
+  if (filters?.difficulty !== undefined) filtered = filtered.filter(l => (l.difficulty || '') === (filters.difficulty || ''))
   if (filters?.scanOperate !== undefined) filtered = filtered.filter((l: any) => l.scanOperate === filters.scanOperate)
 
   filtered.sort((a, b) => b.createTime - a.createTime)
@@ -1795,6 +1803,16 @@ export const localOnlyAddLog = (log: Partial<LogItem>): LogItem => {
 // ==================== 实时同步（Supabase Realtime）====================
 // 订阅库存变化，当其他设备修改库存时自动刷新
 export const subscribeToStockChanges = (callback: () => void) => {
+  // 先移除同名的旧 channel，避免重复订阅导致报错
+  try {
+    const existing = supabase.getChannels().find((ch: any) => ch.topic === 'stock-changes')
+    if (existing) {
+      supabase.removeChannel(existing)
+    }
+  } catch (e) {
+    // 忽略错误
+  }
+
   const channel = supabase
     .channel('stock-changes')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'stock' }, (payload) => {
