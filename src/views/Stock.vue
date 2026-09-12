@@ -40,7 +40,7 @@ const operateCampus = ref('honghe')
 const operateQuantity = ref('')
 const operateRemark = ref('')
 const submitting = ref(false)
-const returnMode = ref<'returnIn' | 'returnOut'>('returnIn') // 退回类型：退回入库/退回出库
+const returnMode = ref<'cancelOut' | 'cancelIn'>('cancelOut') // 撤销类型：撤销出库/撤销入库
 
 // 日志展开相关
 const expandedBookKey = ref<string | null>(null)
@@ -196,7 +196,7 @@ const openOperateModal = (book: MergedStock, type: string) => {
   operateCampus.value = 'honghe'
   operateQuantity.value = ''
   operateRemark.value = ''
-  returnMode.value = 'returnIn'
+  returnMode.value = 'cancelOut'
   showOperateModal.value = true
 }
 
@@ -235,7 +235,7 @@ const confirmOperate = async () => {
     return
   }
   if (type === 'return' && !canStockReturn()) {
-    alert('无权进行退回操作')
+    alert('无权进行撤销操作')
     return
   }
   if (type === 'delete' && !canDeleteBook()) {
@@ -301,10 +301,10 @@ const confirmOperate = async () => {
         loadStockList()
       }
     } else if (type === 'return') {
-      // 退回操作：根据退回类型调用不同的底层操作
-      if (returnMode.value === 'returnIn') {
-        // 退回入库：多录入了书本，需要减少库存（调用出库逻辑）
-        const result = await ds.stockOut({
+      // 撤销操作
+      if (returnMode.value === 'cancelOut') {
+        // 撤销出库：多出库了，减少出库量，库存回升
+        const result = await ds.cancelStockOut({
           campus,
           year: book.year || '',
           term: book.term || '',
@@ -313,19 +313,17 @@ const confirmOperate = async () => {
           difficulty: book.difficulty || '',
           bookName: book.bookName || '',
           quantity: qty,
-          remark: remark || '退回入库',
+          remark: remark || '撤销出库',
           operator: userInfo?.userName || userInfo?.nickName || '',
-          operatorName: userInfo?.userName || userInfo?.nickName || '',
-          logType: 'stock_return',
-          logAction: '退回入库'
+          operatorName: userInfo?.userName || userInfo?.nickName || ''
         })
         alert(result.message)
         if (result.success) {
           loadStockList()
         }
       } else {
-        // 退回出库：多领取了书本，需要增加库存（调用入库逻辑）
-        const result = await ds.stockIn({
+        // 撤销入库：多入库了，减少入库量，库存下降
+        const result = await ds.cancelStockIn({
           campus,
           year: book.year || '',
           term: book.term || '',
@@ -334,11 +332,9 @@ const confirmOperate = async () => {
           difficulty: book.difficulty || '',
           bookName: book.bookName || '',
           quantity: qty,
-          remark: remark || '退回出库',
+          remark: remark || '撤销入库',
           operator: userInfo?.userName || userInfo?.nickName || '',
-          operatorName: userInfo?.userName || userInfo?.nickName || '',
-          logType: 'stock_return',
-          logAction: '退回出库'
+          operatorName: userInfo?.userName || userInfo?.nickName || ''
         })
         alert(result.message)
         if (result.success) {
@@ -463,7 +459,7 @@ const getLogTypeLabel = (type: string, action?: string) => {
   switch (type) {
     case 'stock_in': return { text: '入库', color: '#52c41a' }
     case 'stock_out': return { text: '出库', color: '#ff4d4f' }
-    case 'stock_return': return { text: action || '退回', color: '#722ed1' }
+    case 'stock_return': return { text: action || '撤销', color: '#722ed1' }
     default: return { text: type, color: '#666' }
   }
 }
@@ -602,7 +598,7 @@ const getLogTypeLabel = (type: string, action?: string) => {
             v-if="canStockReturnVal" 
             class="menu-item return" 
             @click="operateType = 'return'"
-          >↩️ 退回</button>
+          >↩️ 撤销</button>
           <button 
             v-if="canForecastSetVal" 
             class="menu-item" 
@@ -630,20 +626,20 @@ const getLogTypeLabel = (type: string, action?: string) => {
           <div v-else>
             <!-- 退回类型选择器 -->
             <div v-if="operateType === 'return'" class="form-group">
-              <label>退回类型</label>
+              <label>撤销类型</label>
               <div class="campus-options">
-                <button 
-                  class="campus-option" 
-                  :class="{ active: returnMode === 'returnIn' }"
-                  @click="returnMode = 'returnIn'"
-                >📥 退回入库</button>
-                <button 
-                  class="campus-option" 
-                  :class="{ active: returnMode === 'returnOut' }"
-                  @click="returnMode = 'returnOut'"
-                >📤 退回出库</button>
+                <button
+                  class="campus-option"
+                  :class="{ active: returnMode === 'cancelOut' }"
+                  @click="returnMode = 'cancelOut'"
+                >📤 撤销出库</button>
+                <button
+                  class="campus-option"
+                  :class="{ active: returnMode === 'cancelIn' }"
+                  @click="returnMode = 'cancelIn'"
+                >📥 撤销入库</button>
               </div>
-              <p class="return-tip">{{ returnMode === 'returnIn' ? '多录入了书本，从库存中退回' : '多领取了书本，退回到库存中' }}</p>
+              <p class="return-tip">{{ returnMode === 'cancelOut' ? '多出库了，减少出库量，库存回升' : '多入库了，减少入库量，库存下降' }}</p>
             </div>
             <div class="form-group">
               <label>校区</label>
@@ -679,7 +675,7 @@ const getLogTypeLabel = (type: string, action?: string) => {
               />
             </div>
           </div>
-          <button class="btn-confirm" @click="confirmOperate" :disabled="submitting" :class="{ 'btn-danger': operateType === 'delete' }">{{ submitting ? '提交中...' : '确认' + (operateType === 'stockIn' ? '入库' : operateType === 'stockOut' ? '出库' : operateType === 'return' ? (returnMode === 'returnIn' ? '退回入库' : '退回出库') : operateType === 'forecast' ? '预计' : operateType === 'receive' ? '领取' : '删除') }}</button>
+          <button class="btn-confirm" @click="confirmOperate" :disabled="submitting" :class="{ 'btn-danger': operateType === 'delete' }">{{ submitting ? '提交中...' : '确认' + (operateType === 'stockIn' ? '入库' : operateType === 'stockOut' ? '出库' : operateType === 'return' ? (returnMode === 'cancelOut' ? '撤销出库' : '撤销入库') : operateType === 'forecast' ? '预计' : operateType === 'receive' ? '领取' : '删除') }}</button>
           <button class="btn-cancel" @click="operateType = ''">返回</button>
         </div>
       </div>

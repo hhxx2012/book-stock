@@ -1042,18 +1042,28 @@ export const fetchMergedStock = async (filters?: {
       const qty = Math.abs(log.quantity || 0)
       const isReturnIn = log.type === 'stock_return' && log.action === '退回入库'
       const isReturnOut = log.type === 'stock_return' && log.action === '退回出库'
+      const isCancelOut = log.type === 'stock_return' && log.action === '撤销出库'
+      const isCancelIn = log.type === 'stock_return' && log.action === '撤销入库'
 
       if (log.campus === 'honghe') {
         if (log.type === 'stock_in' || isReturnOut) {
           logCalculated[key].hongheIn += qty
         } else if (log.type === 'stock_out' || isReturnIn) {
           logCalculated[key].hongheOut += qty
+        } else if (isCancelOut) {
+          logCalculated[key].hongheOut -= qty
+        } else if (isCancelIn) {
+          logCalculated[key].hongheIn -= qty
         }
       } else {
         if (log.type === 'stock_in' || isReturnOut) {
           logCalculated[key].longhuaIn += qty
         } else if (log.type === 'stock_out' || isReturnIn) {
           logCalculated[key].longhuaOut += qty
+        } else if (isCancelOut) {
+          logCalculated[key].longhuaOut -= qty
+        } else if (isCancelIn) {
+          logCalculated[key].longhuaIn -= qty
         }
       }
     })
@@ -1061,15 +1071,17 @@ export const fetchMergedStock = async (filters?: {
     console.warn('[fetchMergedStock] 从日志重算入库/出库失败，使用库存表数据:', e)
   }
 
-  // 用日志计算的值更新 booksMap，取 max(库存表值, 日志值)
+  // 用日志计算的值更新 booksMap
+  // 如果日志有计算结果，优先使用日志值（因为撤销操作是减法，不能简单取 max）
   Object.keys(booksMap).forEach((key) => {
     const item = booksMap[key]
     const logData = logCalculated[key]
     if (logData) {
-      item.hongheTotalIn = Math.max(item.hongheTotalIn || 0, logData.hongheIn)
-      item.hongheTotalOut = Math.max(item.hongheTotalOut || 0, logData.hongheOut)
-      item.longhuaTotalIn = Math.max(item.longhuaTotalIn || 0, logData.longhuaIn)
-      item.longhuaTotalOut = Math.max(item.longhuaTotalOut || 0, logData.longhuaOut)
+      // 入库量取 max（日志计算的值不会超过库存表的总入库量，除非有撤销操作）
+      item.hongheTotalIn = Math.max(0, logData.hongheIn)
+      item.hongheTotalOut = Math.max(0, logData.hongheOut)
+      item.longhuaTotalIn = Math.max(0, logData.longhuaIn)
+      item.longhuaTotalOut = Math.max(0, logData.longhuaOut)
     }
   })
 
@@ -1276,6 +1288,190 @@ export const stockOut = async (data: {
   })
 
   return { success: true, message: '出库成功' }
+}
+
+// 撤销出库：多出库了，减少出库量，库存回升
+export const cancelStockOut = async (data: {
+  campus: string
+  year: string
+  term: string
+  grade: string
+  subject: string
+  difficulty: string
+  bookName?: string
+  quantity: number
+  remark?: string
+  operator?: string
+  operatorName?: string
+}) => {
+  const { campus, year, term, grade, subject, difficulty, bookName, quantity, remark, operator, operatorName } = data
+
+  const online = await isReallyOnline()
+  if (!online) {
+    return { success: false, message: '网络连接失败，数据未上传。\n请网络恢复后重试，或换一个网络正常的设备操作。' }
+  }
+
+  if (checkDuplicateOperation({ type: 'cancel_stock_out', campus, year, term, grade, subject, difficulty, quantity })) {
+    return { success: true, message: '撤销出库成功' }
+  }
+
+  const stockList = await fetchStock()
+  const existing = stockList.find((s: StockItem) =>
+    s.campus === campus && s.year === year && s.term === term &&
+    s.grade === grade && s.subject === subject && s.difficulty === difficulty
+  )
+
+  if (!existing) {
+    return { success: false, message: '库存记录不存在' }
+  }
+
+  const currentTotalOut = existing.totalOut || 0
+  if (quantity > currentTotalOut) {
+    return { success: false, message: `撤销数量(${quantity})超出已出库数量(${currentTotalOut})` }
+  }
+
+  const newTotalOut = currentTotalOut - quantity
+  const newRemaining = (existing.totalIn || 0) - newTotalOut
+
+  const stockData: Partial<StockItem> = {
+    campus,
+    campusName: campus === 'honghe' ? '洪河校区' : '龙华校区',
+    year,
+    term,
+    grade,
+    subject,
+    difficulty: difficulty || '',
+    bookName: bookName || existing.bookName || '',
+    bookCode: existing.bookCode || '',
+    totalQuantity: newRemaining,
+    hongheQuantity: campus === 'honghe' ? newRemaining : (existing.hongheQuantity || 0),
+    longhuaQuantity: campus === 'longhua' ? newRemaining : (existing.longhuaQuantity || 0),
+    totalIn: existing.totalIn || 0,
+    totalOut: newTotalOut,
+    remainingStock: newRemaining,
+    createTime: existing.createTime || Date.now(),
+    updateTime: Date.now()
+  }
+
+  const upsertResult = await upsertStock(stockData)
+  if (!upsertResult.success) {
+    return { success: false, message: upsertResult.error || '撤销出库失败' }
+  }
+
+  await addLog({
+    stockId: existing._id || '',
+    type: 'stock_return',
+    operator: operator || '',
+    operatorName: operatorName || '',
+    action: '撤销出库',
+    detail: remark || '撤销出库',
+    year,
+    term,
+    grade,
+    subject,
+    difficulty: difficulty || '',
+    campus,
+    bookName: bookName || existing.bookName || '',
+    quantity,
+    note: remark || '撤销出库',
+    createTime: Date.now()
+  })
+
+  return { success: true, message: '撤销出库成功' }
+}
+
+// 撤销入库：多入库了，减少入库量，库存下降
+export const cancelStockIn = async (data: {
+  campus: string
+  year: string
+  term: string
+  grade: string
+  subject: string
+  difficulty: string
+  bookName?: string
+  quantity: number
+  remark?: string
+  operator?: string
+  operatorName?: string
+}) => {
+  const { campus, year, term, grade, subject, difficulty, bookName, quantity, remark, operator, operatorName } = data
+
+  const online = await isReallyOnline()
+  if (!online) {
+    return { success: false, message: '网络连接失败，数据未上传。\n请网络恢复后重试，或换一个网络正常的设备操作。' }
+  }
+
+  if (checkDuplicateOperation({ type: 'cancel_stock_in', campus, year, term, grade, subject, difficulty, quantity })) {
+    return { success: true, message: '撤销入库成功' }
+  }
+
+  const stockList = await fetchStock()
+  const existing = stockList.find((s: StockItem) =>
+    s.campus === campus && s.year === year && s.term === term &&
+    s.grade === grade && s.subject === subject && s.difficulty === difficulty
+  )
+
+  if (!existing) {
+    return { success: false, message: '库存记录不存在' }
+  }
+
+  const currentTotalIn = existing.totalIn || 0
+  if (quantity > currentTotalIn) {
+    return { success: false, message: `撤销数量(${quantity})超出已入库数量(${currentTotalIn})` }
+  }
+
+  const newTotalIn = currentTotalIn - quantity
+  const newRemaining = newTotalIn - (existing.totalOut || 0)
+
+  if (newRemaining < 0) {
+    return { success: false, message: '撤销后库存为负，无法撤销' }
+  }
+
+  const stockData: Partial<StockItem> = {
+    campus,
+    campusName: campus === 'honghe' ? '洪河校区' : '龙华校区',
+    year,
+    term,
+    grade,
+    subject,
+    difficulty: difficulty || '',
+    bookName: bookName || existing.bookName || '',
+    bookCode: existing.bookCode || '',
+    totalQuantity: newRemaining,
+    hongheQuantity: campus === 'honghe' ? newRemaining : (existing.hongheQuantity || 0),
+    longhuaQuantity: campus === 'longhua' ? newRemaining : (existing.longhuaQuantity || 0),
+    totalIn: newTotalIn,
+    totalOut: existing.totalOut || 0,
+    remainingStock: newRemaining,
+    createTime: existing.createTime || Date.now(),
+    updateTime: Date.now()
+  }
+
+  const upsertResult = await upsertStock(stockData)
+  if (!upsertResult.success) {
+    return { success: false, message: upsertResult.error || '撤销入库失败' }
+  }
+
+  await addLog({
+    stockId: existing._id || '',
+    type: 'stock_return',
+    operator: operator || '',
+    operatorName: operatorName || '',
+    action: '撤销入库',
+    detail: remark || '撤销入库',
+    year,
+    term,
+    grade,
+    subject,
+    difficulty: difficulty || '',
+    campus,
+    bookName: bookName || existing.bookName || '',
+    quantity,
+    note: remark || '撤销入库',
+    createTime: Date.now()
+  })
+
+  return { success: true, message: '撤销入库成功' }
 }
 
 // 获取库存日志
