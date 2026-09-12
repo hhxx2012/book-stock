@@ -1072,16 +1072,15 @@ export const fetchMergedStock = async (filters?: {
   }
 
   // 用日志计算的值更新 booksMap
-  // 如果日志有计算结果，优先使用日志值（因为撤销操作是减法，不能简单取 max）
+  // 取库存表值和日志计算值的较大者，防止日志缺失时覆盖库存表的正确数据
   Object.keys(booksMap).forEach((key) => {
     const item = booksMap[key]
     const logData = logCalculated[key]
     if (logData) {
-      // 入库量取 max（日志计算的值不会超过库存表的总入库量，除非有撤销操作）
-      item.hongheTotalIn = Math.max(0, logData.hongheIn)
-      item.hongheTotalOut = Math.max(0, logData.hongheOut)
-      item.longhuaTotalIn = Math.max(0, logData.longhuaIn)
-      item.longhuaTotalOut = Math.max(0, logData.longhuaOut)
+      item.hongheTotalIn = Math.max(item.hongheTotalIn || 0, logData.hongheIn)
+      item.hongheTotalOut = Math.max(item.hongheTotalOut || 0, logData.hongheOut)
+      item.longhuaTotalIn = Math.max(item.longhuaTotalIn || 0, logData.longhuaIn)
+      item.longhuaTotalOut = Math.max(item.longhuaTotalOut || 0, logData.longhuaOut)
     }
   })
 

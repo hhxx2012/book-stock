@@ -917,13 +917,24 @@ const parseCSV = async (text: string) => {
           if (!lhResult.success) { stockFailed = true; importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】龙华校区库存失败：${lhResult.error || ''}`) }
           if (row.hongheQty > 0 || row.longhuaQty > 0) {
             const userInfo = getUserInfo()
-            await ds.addLog({
-              type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
-              action: '入库', detail: '批量导入(覆盖)',
-              year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
-              campus: row.hongheQty > 0 ? 'honghe' : 'longhua', bookName: row.bookName,
-              quantity: row.hongheQty + row.longhuaQty, note: '批量导入(覆盖)', createTime: now
-            })
+            if (row.hongheQty > 0) {
+              await ds.addLog({
+                type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
+                action: '入库', detail: '批量导入(覆盖)',
+                year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
+                campus: 'honghe', bookName: row.bookName,
+                quantity: row.hongheQty, note: '批量导入(覆盖)', createTime: now
+              })
+            }
+            if (row.longhuaQty > 0) {
+              await ds.addLog({
+                type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
+                action: '入库', detail: '批量导入(覆盖)',
+                year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
+                campus: 'longhua', bookName: row.bookName,
+                quantity: row.longhuaQty, note: '批量导入(覆盖)', createTime: now
+              })
+            }
           }
           if (!stockFailed) importResult.value.success++
         } else {
@@ -967,7 +978,28 @@ const parseCSV = async (text: string) => {
             })
             if (!result.success) { mergeFailed = true; importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】龙华校区库存累加失败：${result.error || ''}`) }
           }
-          if (!mergeFailed) importResult.value.success++
+          if (!mergeFailed) {
+            importResult.value.success++
+            const userInfo = getUserInfo()
+            if (row.hongheQty > 0) {
+              await ds.addLog({
+                type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
+                action: '入库', detail: '批量导入(合并)',
+                year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
+                campus: 'honghe', bookName: row.bookName,
+                quantity: row.hongheQty, note: '批量导入(合并)', createTime: now
+              })
+            }
+            if (row.longhuaQty > 0) {
+              await ds.addLog({
+                type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
+                action: '入库', detail: '批量导入(合并)',
+                year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
+                campus: 'longhua', bookName: row.bookName,
+                quantity: row.longhuaQty, note: '批量导入(合并)', createTime: now
+              })
+            }
+          }
           else importResult.value.skipped++
         }
       } else {
@@ -1009,6 +1041,27 @@ const parseCSV = async (text: string) => {
           totalIn: row.longhuaQty, totalOut: 0, remainingStock: row.longhuaQty, createTime: now, updateTime: now
         })
         if (!lhResult.success) { importResult.value.errors.push(`第${row.lineNum}行【${row.bookName}】龙华校区库存失败：${lhResult.error || ''}`) }
+        if (row.hongheQty > 0 || row.longhuaQty > 0) {
+          const userInfo = getUserInfo()
+          if (row.hongheQty > 0) {
+            await ds.addLog({
+              type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
+              action: '入库', detail: '批量导入',
+              year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
+              campus: 'honghe', bookName: row.bookName,
+              quantity: row.hongheQty, note: '批量导入', createTime: now
+            })
+          }
+          if (row.longhuaQty > 0) {
+            await ds.addLog({
+              type: 'stock_in', operator: userInfo?.userName || '管理员', operatorName: userInfo?.userName || '管理员',
+              action: '入库', detail: '批量导入',
+              year: row.year, term: row.term, grade: row.grade, subject: row.subject, difficulty: row.difficulty,
+              campus: 'longhua', bookName: row.bookName,
+              quantity: row.longhuaQty, note: '批量导入', createTime: now
+            })
+          }
+        }
       }
     }
 
