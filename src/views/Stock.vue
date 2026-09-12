@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import {
   getDefaultYear, getDefaultTerm, setDefaultYear, setDefaultTerm,
   getRole, getCampus, getUserInfo,
-  canStockIn, canStockOut, canDeleteBook, canReceiveSet, canForecastSet, canStockReturn
+  canStockIn, canStockOut, canDeleteBook, canReceiveSet, canForecastSet, canStockReturn, canStockTransfer
 } from '../utils/storage'
 import { isCloudConnected, connectToCloud, isSupabaseConfigured } from '../utils/supabase'
 import * as ds from '../services/dataService'
@@ -31,6 +31,7 @@ const canDeleteBookVal = computed(() => canDeleteBook())
 const canReceiveSetVal = computed(() => canReceiveSet())
 const canForecastSetVal = computed(() => canForecastSet())
 const canStockReturnVal = computed(() => canStockReturn())
+const canStockTransferVal = computed(() => canStockTransfer())
 
 // 操作弹窗相关
 const showOperateModal = ref(false)
@@ -41,6 +42,7 @@ const operateQuantity = ref('')
 const operateRemark = ref('')
 const submitting = ref(false)
 const returnMode = ref<'cancelOut' | 'cancelIn'>('cancelOut') // 撤销类型：撤销出库/撤销入库
+const transferDirection = ref<'honghe-to-longhua' | 'longhua-to-honghe'>('honghe-to-longhua') // 调拨方向
 
 // 日志展开相关
 const expandedBookKey = ref<string | null>(null)
@@ -197,6 +199,7 @@ const openOperateModal = (book: MergedStock, type: string) => {
   operateQuantity.value = ''
   operateRemark.value = ''
   returnMode.value = 'cancelOut'
+  transferDirection.value = 'honghe-to-longhua'
   showOperateModal.value = true
 }
 
@@ -236,6 +239,10 @@ const confirmOperate = async () => {
   }
   if (type === 'return' && !canStockReturn()) {
     alert('无权进行撤销操作')
+    return
+  }
+  if (type === 'transfer' && !canStockTransfer()) {
+    alert('无权进行调拨操作')
     return
   }
   if (type === 'delete' && !canDeleteBook()) {
@@ -340,6 +347,27 @@ const confirmOperate = async () => {
         if (result.success) {
           loadStockList()
         }
+      }
+    } else if (type === 'transfer') {
+      const fromCampus = transferDirection.value === 'honghe-to-longhua' ? 'honghe' : 'longhua'
+      const toCampus = transferDirection.value === 'honghe-to-longhua' ? 'longhua' : 'honghe'
+      const result = await ds.transferStock({
+        fromCampus,
+        toCampus,
+        year: book.year || '',
+        term: book.term || '',
+        grade: book.grade || '',
+        subject: book.subject || '',
+        difficulty: book.difficulty || '',
+        bookName: book.bookName || '',
+        quantity: qty,
+        remark: remark || '调拨',
+        operator: userInfo?.userName || userInfo?.nickName || '',
+        operatorName: userInfo?.userName || userInfo?.nickName || ''
+      })
+      alert(result.message)
+      if (result.success) {
+        loadStockList()
       }
     } else if (type === 'forecast') {
       const result = await ds.addForecast({
@@ -600,6 +628,11 @@ const getLogTypeLabel = (type: string, action?: string) => {
             @click="operateType = 'return'"
           >↩️ 撤销</button>
           <button 
+            v-if="canStockTransferVal" 
+            class="menu-item transfer" 
+            @click="operateType = 'transfer'"
+          >🔄 调拨</button>
+          <button 
             v-if="canForecastSetVal" 
             class="menu-item" 
             @click="operateType = 'forecast'"
@@ -641,7 +674,24 @@ const getLogTypeLabel = (type: string, action?: string) => {
               </div>
               <p class="return-tip">{{ returnMode === 'cancelOut' ? '多出库了，减少出库量，库存回升' : '多入库了，减少入库量，库存下降' }}</p>
             </div>
-            <div class="form-group">
+            <!-- 调拨方向选择器 -->
+            <div v-if="operateType === 'transfer'" class="form-group">
+              <label>调拨方向</label>
+              <div class="campus-options">
+                <button
+                  class="campus-option"
+                  :class="{ active: transferDirection === 'honghe-to-longhua' }"
+                  @click="transferDirection = 'honghe-to-longhua'"
+                >🏫→🏢 洪河→龙华</button>
+                <button
+                  class="campus-option"
+                  :class="{ active: transferDirection === 'longhua-to-honghe' }"
+                  @click="transferDirection = 'longhua-to-honghe'"
+                >🏢→🏫 龙华→洪河</button>
+              </div>
+              <p class="return-tip">源校区入库减少、目标校区入库增加，出库不变，合计不变</p>
+            </div>
+            <div class="form-group" v-if="operateType !== 'transfer'">
               <label>校区</label>
               <div class="campus-options">
                 <button 
@@ -675,7 +725,7 @@ const getLogTypeLabel = (type: string, action?: string) => {
               />
             </div>
           </div>
-          <button class="btn-confirm" @click="confirmOperate" :disabled="submitting" :class="{ 'btn-danger': operateType === 'delete' }">{{ submitting ? '提交中...' : '确认' + (operateType === 'stockIn' ? '入库' : operateType === 'stockOut' ? '出库' : operateType === 'return' ? (returnMode === 'cancelOut' ? '撤销出库' : '撤销入库') : operateType === 'forecast' ? '预计' : operateType === 'receive' ? '领取' : '删除') }}</button>
+          <button class="btn-confirm" @click="confirmOperate" :disabled="submitting" :class="{ 'btn-danger': operateType === 'delete' }">{{ submitting ? '提交中...' : '确认' + (operateType === 'stockIn' ? '入库' : operateType === 'stockOut' ? '出库' : operateType === 'return' ? (returnMode === 'cancelOut' ? '撤销出库' : '撤销入库') : operateType === 'transfer' ? '调拨' : operateType === 'forecast' ? '预计' : operateType === 'receive' ? '领取' : '删除') }}</button>
           <button class="btn-cancel" @click="operateType = ''">返回</button>
         </div>
       </div>
@@ -1144,6 +1194,11 @@ const getLogTypeLabel = (type: string, action?: string) => {
 .menu-item.return {
   background: #f9f0ff;
   color: #722ed1;
+}
+
+.menu-item.transfer {
+  background: #e6fffb;
+  color: #08979c;
 }
 
 .operate-form {

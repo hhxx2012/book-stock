@@ -1044,6 +1044,8 @@ export const fetchMergedStock = async (filters?: {
       const isReturnOut = log.type === 'stock_return' && log.action === '退回出库'
       const isCancelOut = log.type === 'stock_return' && log.action === '撤销出库'
       const isCancelIn = log.type === 'stock_return' && log.action === '撤销入库'
+      const isTransferOut = log.type === 'stock_transfer' && log.action === '调拨出'
+      const isTransferIn = log.type === 'stock_transfer' && log.action === '调拨入'
 
       if (log.campus === 'honghe') {
         if (log.type === 'stock_in' || isReturnOut) {
@@ -1054,6 +1056,10 @@ export const fetchMergedStock = async (filters?: {
           logCalculated[key].hongheOut -= qty
         } else if (isCancelIn) {
           logCalculated[key].hongheIn -= qty
+        } else if (isTransferOut) {
+          logCalculated[key].hongheIn -= qty
+        } else if (isTransferIn) {
+          logCalculated[key].hongheIn += qty
         }
       } else {
         if (log.type === 'stock_in' || isReturnOut) {
@@ -1064,6 +1070,10 @@ export const fetchMergedStock = async (filters?: {
           logCalculated[key].longhuaOut -= qty
         } else if (isCancelIn) {
           logCalculated[key].longhuaIn -= qty
+        } else if (isTransferOut) {
+          logCalculated[key].longhuaIn -= qty
+        } else if (isTransferIn) {
+          logCalculated[key].longhuaIn += qty
         }
       }
     })
@@ -1471,6 +1481,147 @@ export const cancelStockIn = async (data: {
   })
 
   return { success: true, message: '撤销入库成功' }
+}
+
+// 调拨：校区间转移书本，源校区入库量减少，目标校区入库量增加，出库不变
+export const transferStock = async (data: {
+  fromCampus: string
+  toCampus: string
+  year: string
+  term: string
+  grade: string
+  subject: string
+  difficulty: string
+  bookName?: string
+  quantity: number
+  remark?: string
+  operator?: string
+  operatorName?: string
+}) => {
+  const { fromCampus, toCampus, year, term, grade, subject, difficulty, bookName, quantity, remark, operator, operatorName } = data
+
+  const online = await isReallyOnline()
+  if (!online) {
+    return { success: false, message: '网络连接失败，数据未上传。\n请网络恢复后重试，或换一个网络正常的设备操作。' }
+  }
+
+  if (fromCampus === toCampus) {
+    return { success: false, message: '源校区和目标校区不能相同' }
+  }
+
+  const stockList = await fetchStock()
+  const fromExisting = stockList.find((s: StockItem) =>
+    s.campus === fromCampus && s.year === year && s.term === term &&
+    s.grade === grade && s.subject === subject && s.difficulty === difficulty
+  )
+  const toExisting = stockList.find((s: StockItem) =>
+    s.campus === toCampus && s.year === year && s.term === term &&
+    s.grade === grade && s.subject === subject && s.difficulty === difficulty
+  )
+
+  if (!fromExisting) {
+    return { success: false, message: '源校区库存记录不存在' }
+  }
+
+  const fromRemaining = (fromExisting.totalIn || 0) - (fromExisting.totalOut || 0)
+  if (quantity > fromRemaining) {
+    return { success: false, message: `调拨数量(${quantity})超过源校区剩余库存(${fromRemaining})` }
+  }
+
+  const fromNewTotalIn = (fromExisting.totalIn || 0) - quantity
+  const fromNewRemaining = fromNewTotalIn - (fromExisting.totalOut || 0)
+  const fromCampusName = fromCampus === 'honghe' ? '洪河校区' : '龙华校区'
+
+  const fromStockData: Partial<StockItem> = {
+    campus: fromCampus,
+    campusName: fromCampusName,
+    year, term, grade, subject,
+    difficulty: difficulty || '',
+    bookName: bookName || fromExisting.bookName || '',
+    bookCode: fromExisting.bookCode || '',
+    totalQuantity: fromNewRemaining,
+    hongheQuantity: fromCampus === 'honghe' ? fromNewRemaining : (toExisting?.hongheQuantity || 0),
+    longhuaQuantity: fromCampus === 'longhua' ? fromNewRemaining : (toExisting?.longhuaQuantity || 0),
+    totalIn: fromNewTotalIn,
+    totalOut: fromExisting.totalOut || 0,
+    remainingStock: fromNewRemaining,
+    createTime: fromExisting.createTime || Date.now(),
+    updateTime: Date.now()
+  }
+
+  const fromResult = await upsertStock(fromStockData)
+  if (!fromResult.success) {
+    return { success: false, message: fromResult.error || '调拨失败（源校区更新失败）' }
+  }
+
+  const toNewTotalIn = (toExisting?.totalIn || 0) + quantity
+  const toNewRemaining = toNewTotalIn - (toExisting?.totalOut || 0)
+  const toCampusName = toCampus === 'honghe' ? '洪河校区' : '龙华校区'
+
+  const toStockData: Partial<StockItem> = {
+    campus: toCampus,
+    campusName: toCampusName,
+    year, term, grade, subject,
+    difficulty: difficulty || '',
+    bookName: bookName || toExisting?.bookName || '',
+    bookCode: toExisting?.bookCode || '',
+    totalQuantity: toNewRemaining,
+    hongheQuantity: toCampus === 'honghe' ? toNewRemaining : (fromExisting.hongheQuantity || 0),
+    longhuaQuantity: toCampus === 'longhua' ? toNewRemaining : (fromExisting.longhuaQuantity || 0),
+    totalIn: toNewTotalIn,
+    totalOut: toExisting?.totalOut || 0,
+    remainingStock: toNewRemaining,
+    createTime: toExisting?.createTime || Date.now(),
+    updateTime: Date.now()
+  }
+
+  const toResult = await upsertStock(toStockData)
+  if (!toResult.success) {
+    // 回滚源校区
+    await upsertStock({
+      ...fromExisting,
+      updateTime: Date.now()
+    })
+    return { success: false, message: toResult.error || '调拨失败（目标校区更新失败）' }
+  }
+
+  const now = Date.now()
+  const fromCampusLabel = fromCampus === 'honghe' ? '洪河' : '龙华'
+  const toCampusLabel = toCampus === 'honghe' ? '洪河' : '龙华'
+
+  await addLog({
+    stockId: fromExisting._id || '',
+    type: 'stock_transfer',
+    operator: operator || '',
+    operatorName: operatorName || '',
+    action: '调拨出',
+    detail: remark || `调拨至${toCampusLabel}校区`,
+    year, term, grade, subject,
+    difficulty: difficulty || '',
+    campus: fromCampus,
+    bookName: bookName || fromExisting.bookName || '',
+    quantity,
+    note: `调拨至${toCampusLabel}校区`,
+    createTime: now
+  })
+
+  await addLog({
+    stockId: toExisting?._id || '',
+    type: 'stock_transfer',
+    operator: operator || '',
+    operatorName: operatorName || '',
+    action: '调拨入',
+    detail: remark || `从${fromCampusLabel}校区调拨`,
+    year, term, grade, subject,
+    difficulty: difficulty || '',
+    campus: toCampus,
+    bookName: bookName || toExisting?.bookName || '',
+    quantity,
+    note: `从${fromCampusLabel}校区调拨`,
+    createTime: now + 1
+  })
+
+  return { success: true, message: `调拨成功：${fromCampusLabel}→${toCampusLabel}，${quantity}本` }
 }
 
 // 获取库存日志

@@ -18,7 +18,8 @@ const permissions = ref([
   { id: 'view_stock', label: '库存查询', group: '库存管理' },
   { id: 'stock_in', label: '入库', group: '库存管理' },
   { id: 'stock_out', label: '出库', group: '库存管理' },
-  { id: 'stock_return', label: '退回', group: '库存管理' },
+  { id: 'stock_return', label: '撤销', group: '库存管理' },
+  { id: 'stock_transfer', label: '调拨', group: '库存管理' },
   { id: 'delete_book', label: '删除书本', group: '库存管理' },
   // 预计管理
   { id: 'forecast_view', label: '查看预计', group: '预计管理' },

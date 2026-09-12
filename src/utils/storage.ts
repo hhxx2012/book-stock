@@ -169,6 +169,10 @@ export const canStockReturn = () => {
   return isSuperAdmin() || hasPermission('stock_return')
 }
 
+export const canStockTransfer = () => {
+  return isSuperAdmin() || hasPermission('stock_transfer')
+}
+
 export const canStockInOut = () => {
   return canStockIn() || canStockOut()
 }

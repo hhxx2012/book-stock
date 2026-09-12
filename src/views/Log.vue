@@ -17,7 +17,8 @@ const typeOptions = [
   { value: '', label: '全部' },
   { value: 'stock_in', label: '入库' },
   { value: 'stock_out', label: '出库' },
-  { value: 'stock_return', label: '退回' },
+  { value: 'stock_return', label: '撤销' },
+  { value: 'stock_transfer', label: '调拨' },
   { value: 'forecast', label: '预计' },
   { value: 'receive', label: '领取' }
 ]
@@ -70,6 +71,7 @@ const getBookName = (bookCode: string): string => {
 
 const getTypeName = (type: string, action?: string): string => {
   if (type === 'stock_return' && action) return action
+  if (type === 'stock_transfer' && action) return action
   const option = typeOptions.find(o => o.value === type)
   return option ? option.label : type
 }
@@ -244,6 +246,11 @@ const formatLogTime = (log: LogItem) => {
 .log-type.stock_return {
   background: #fff0f6;
   color: #eb2f96;
+}
+
+.log-type.stock_transfer {
+  background: #e6fffb;
+  color: #08979c;
 }
 
 .log-time {
