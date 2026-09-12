@@ -2000,7 +2000,7 @@ export const localOnlyAddLog = (log: Partial<LogItem>): LogItem => {
 export const subscribeToStockChanges = (callback: () => void) => {
   // 先移除同名的旧 channel，避免重复订阅导致报错
   try {
-    const existing = supabase.getChannels().find((ch: any) => ch.topic === 'stock-changes')
+    const existing = supabase.getChannels().find((ch: any) => ch.topic === 'realtime:stock-changes')
     if (existing) {
       supabase.removeChannel(existing)
     }
