@@ -1006,7 +1006,66 @@ export const fetchMergedStock = async (filters?: {
     }
   })
 
-  // 重新计算剩余库存（从 totalIn - totalOut 推导，避免重复记录导致数据不一致）
+  // 从日志表重新计算 totalIn/totalOut，确保即使库存表数据不一致也能正确显示
+  try {
+    const allLogs = await fetchLogs()
+    // 按当前筛选条件过滤日志
+    let relevantLogs = allLogs
+    if (filters?.year) relevantLogs = relevantLogs.filter((l: any) => l.year === filters.year)
+    if (filters?.term) relevantLogs = relevantLogs.filter((l: any) => l.term === filters.term)
+    if (filters?.grade) relevantLogs = relevantLogs.filter((l: any) => l.grade === filters.grade)
+    if (filters?.subject) relevantLogs = relevantLogs.filter((l: any) => l.subject === filters.subject)
+
+    // 日志去重（与 fetchLogs 相同的去重逻辑）
+    const buildLogKey = (l: any) => {
+      const time = l.createTime || 0
+      const timeBucket = Math.floor(time / 3000)
+      return `${l.type}|${l.year}|${l.term}|${l.grade}|${l.subject}|${l.difficulty || ''}|${l.campus}|${l.quantity}|${l.action || ''}|${timeBucket}`
+    }
+    const seen = new Set<string>()
+    relevantLogs = relevantLogs.filter((l: any) => {
+      const key = buildLogKey(l)
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+
+    // 重置所有 totalIn/totalOut 为 0，然后从日志重新累加
+    Object.values(booksMap).forEach((item: any) => {
+      item.hongheTotalIn = 0
+      item.hongheTotalOut = 0
+      item.longhuaTotalIn = 0
+      item.longhuaTotalOut = 0
+    })
+
+    relevantLogs.forEach((log: any) => {
+      const key = `${log.year}-${log.term}-${log.grade}-${log.subject}-${log.difficulty || ''}`
+      const item = booksMap[key]
+      if (!item) return
+
+      const qty = Math.abs(log.quantity || 0)
+      const isReturnIn = log.type === 'stock_return' && log.action === '退回入库'
+      const isReturnOut = log.type === 'stock_return' && log.action === '退回出库'
+
+      if (log.campus === 'honghe') {
+        if (log.type === 'stock_in' || isReturnOut) {
+          item.hongheTotalIn += qty
+        } else if (log.type === 'stock_out' || isReturnIn) {
+          item.hongheTotalOut += qty
+        }
+      } else {
+        if (log.type === 'stock_in' || isReturnOut) {
+          item.longhuaTotalIn += qty
+        } else if (log.type === 'stock_out' || isReturnIn) {
+          item.longhuaTotalOut += qty
+        }
+      }
+    })
+  } catch (e) {
+    console.warn('[fetchMergedStock] 从日志重算入库/出库失败，使用库存表数据:', e)
+  }
+
+  // 重新计算剩余库存（从 totalIn - totalOut 推导）
   Object.values(booksMap).forEach((item: any) => {
     item.hongheStock = (item.hongheTotalIn || 0) - (item.hongheTotalOut || 0)
     item.longhuaStock = (item.longhuaTotalIn || 0) - (item.longhuaTotalOut || 0)
