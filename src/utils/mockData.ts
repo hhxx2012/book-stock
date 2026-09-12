@@ -328,7 +328,7 @@ export const mockGetStock = async (data: any) => {
   let mergedList = Object.values(booksMap)
 
   const levelOrder: Record<string, number> = { '无': 0, '基础': 1, '培优': 2, '尖子': 3 }
-  const gradeOrderList = ['幼升小', '1年级', '2年级', '3年级', '4年级', '5年级', '6年级', '小升初', '7年级', '8年级', '9年级', '初升高', '高一', '高二']
+  const gradeOrderList = ['幼升小', '1年级', '2年级', '3年级', '4年级', '5年级', '6年级', '小升初', '7年级', '8年级', '9年级', '初升高', '高一', '高二', '高三']
 
   mergedList.sort((a, b) => {
     const gradeCompare = gradeOrderList.indexOf(a.grade) - gradeOrderList.indexOf(b.grade)
@@ -527,7 +527,7 @@ export const initMockData = () => {
   const now = Date.now()
   const year = '2026'
   const terms = ['暑期', '秋期']
-  const grades = ['幼升小', '1年级', '2年级', '3年级', '4年级', '5年级', '6年级', '小升初', '7年级', '8年级', '9年级', '初升高', '高一', '高二']
+  const grades = ['幼升小', '1年级', '2年级', '3年级', '4年级', '5年级', '6年级', '小升初', '7年级', '8年级', '9年级', '初升高', '高一', '高二', '高三']
   const subjects = ['语文', '数学', '英语', '物理', '化学']
   const difficulties = ['无', '基础', '培优', '尖子']
 

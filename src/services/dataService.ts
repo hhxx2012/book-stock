@@ -799,7 +799,7 @@ export const cleanupOrphanedStock = async () => {
 }
 
 // 系统标准年级和难度列表（用于检测并清理旧数据）
-const VALID_GRADES = ['幼升小', '1年级', '2年级', '3年级', '4年级', '5年级', '6年级', '小升初', '7年级', '8年级', '9年级', '初升高', '高一', '高二']
+const VALID_GRADES = ['幼升小', '1年级', '2年级', '3年级', '4年级', '5年级', '6年级', '小升初', '7年级', '8年级', '9年级', '初升高', '高一', '高二', '高三']
 const VALID_DIFFICULTIES = ['无', '基础', '培优', '尖子']
 
 // 清理无效日志记录：只清理使用了旧年级名/难度名的日志
@@ -952,7 +952,7 @@ export const fetchMergedStock = async (filters?: {
   let mergedList = Object.values(booksMap)
 
   const levelOrder: Record<string, number> = { '无': 0, '基础': 1, '培优': 2, '尖子': 3 }
-  const gradeOrderList = ['幼升小', '1年级', '2年级', '3年级', '4年级', '5年级', '6年级', '小升初', '7年级', '8年级', '9年级', '初升高', '高一', '高二']
+  const gradeOrderList = ['幼升小', '1年级', '2年级', '3年级', '4年级', '5年级', '6年级', '小升初', '7年级', '8年级', '9年级', '初升高', '高一', '高二', '高三']
 
   mergedList.sort((a, b) => {
     const gradeCompare = gradeOrderList.indexOf(a.grade) - gradeOrderList.indexOf(b.grade)

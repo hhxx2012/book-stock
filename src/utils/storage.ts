@@ -324,7 +324,8 @@ export const DEFAULT_GRADES: Grade[] = [
   { id: '11', name: '9年级', order: 11 },
   { id: '12', name: '初升高', order: 12 },
   { id: '13', name: '高一', order: 13 },
-  { id: '14', name: '高二', order: 14 }
+  { id: '14', name: '高二', order: 14 },
+  { id: '15', name: '高三', order: 15 }
 ]
 
 export const setGradeList = (list: Grade[]) => {
